@@ -82,13 +82,12 @@
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="#000">
                         <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
                     </svg>
-                    <span>照片验真</span>
+                    <span>真实可验</span>
                     <svg viewBox="0 0 24 24" width="12" height="12" fill="#000">
                         <path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/>
                     </svg>
                 </button>
                 <div class="top-bar-spacer"></div>
-                <div class="vip-badge">VIP</div>
                 <button id="btn-switch-camera" class="top-bar-btn">
                     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2">
                         <path d="M3 7h4l2-3h6l2 3h4v12H3V7z"/>
@@ -103,12 +102,12 @@
         <div class="bottom-panel">
             <!-- 快捷操作条 -->
             <div class="quick-actions">
-                <div class="quick-left">立即登录 ></div>
+                <div class="quick-left">相机用户 ></div>
                 <div class="quick-right">
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
                         <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
                     </svg>
-                    <span>我的团队</span>
+                    <span>水印设置</span>
                 </div>
             </div>
 
@@ -137,7 +136,6 @@
             <!-- 模式切换标签 -->
             <div class="mode-tabs">
                 <div class="mode-tab" data-mode="edit">照片编辑</div>
-                <div class="mode-tab" data-mode="video">视频</div>
                 <div class="mode-tab active" data-mode="photo">照片</div>
                 <div class="mode-tab" data-mode="collage">边拍边拼</div>
                 <div class="mode-tab" data-mode="report">拼图汇报</div>
@@ -158,10 +156,9 @@
                     <div class="template-grid">
                         <div class="template-item active" data-template="default">
                             <div class="template-preview template-default">
-                                <div class="tp-time">04:54</div>
-                                <div class="tp-date">2026-08-04</div>
-                                <div class="tp-weather">星期二 晴 27°C</div>
-                                <div class="tp-loc">苏州市吴中区</div>
+                                <div class="tp-header"><div class="tp-time">05:20</div><div class="tp-details"><div class="tp-date">2026-10-09</div><div class="tp-weather">星期五 轻度雾霾 17°C</div></div></div>
+                                <div class="tp-loc">南京市浦口区 · 兰新路</div>
+                                <div class="tp-coords">经纬度：32.189802°N</div>
                             </div>
                             <span>经典</span>
                         </div>
@@ -189,6 +186,8 @@
                             <span>专业</span>
                         </div>
                     </div>
+                    <button id="btn-reference-watermark" class="action-btn">填入参考图内容</button>
+                    <p class="location-help">使用示例时间、天气、地址和经纬度；填入后可以继续编辑。</p>
                 </div>
 
                 <!-- 时间设置 -->
@@ -224,22 +223,30 @@
                     </label>
                     <div id="location-settings" class="sub-settings hidden">
                         <div class="input-group">
-                            <label>省份/城市</label>
-                            <input type="text" id="custom-province" placeholder="如：苏州市">
+                            <label>省份/直辖市</label>
+                            <input type="text" id="custom-province" placeholder="如：江苏省">
                         </div>
                         <div class="input-group">
-                            <label>区/县</label>
-                            <input type="text" id="custom-city" placeholder="如：吴中区">
+                            <label>城市/区县</label>
+                            <input type="text" id="custom-city" placeholder="如：苏州市吴中区">
                         </div>
                         <div class="input-group">
-                            <label>详细地址</label>
-                            <input type="text" id="custom-address" placeholder="如：苏州福宝光电有限公司">
+                            <label>街道、门牌和地点名称</label>
+                            <textarea id="custom-address" rows="3" placeholder="如：东吴北路168号，某某大厦2栋301室"></textarea>
+                            <p class="location-help">定位后可补充楼栋、楼层或房间号；长地址会自动换行显示。</p>
                         </div>
                         <div class="input-group">
                             <label>经纬度（可选）</label>
                             <input type="text" id="custom-coords" placeholder="如：31.2989,120.5853">
                         </div>
-                        <button id="btn-get-location" class="action-btn">获取当前定位</button>
+                        <label class="settings-label">
+                            <span>显示经纬度</span>
+                            <label class="switch">
+                                <input type="checkbox" id="toggle-coordinates" checked>
+                                <span class="slider"></span>
+                            </label>
+                        </label>
+                        <button id="btn-get-location" class="action-btn">获取详细地址</button>
                         <div id="location-status" class="location-status"></div>
                     </div>
                 </div>
@@ -290,7 +297,7 @@
                 <!-- 自定义文字 -->
                 <div class="settings-section">
                     <label class="settings-label">
-                        <span>自定义文字</span>
+                        <span>添加备注文字</span>
                         <label class="switch">
                             <input type="checkbox" id="toggle-custom-text">
                             <span class="slider"></span>
@@ -306,7 +313,7 @@
 
                 <!-- 防伪设置 -->
                 <div class="settings-section">
-                    <label class="settings-label">防伪与品牌</label>
+                    <label class="settings-label">照片编号与品牌</label>
                     <div class="antifake-settings">
                         <div class="antifake-toggle-row">
                             <div class="antifake-toggle-info">
@@ -318,10 +325,27 @@
                                 <span class="slider"></span>
                             </label>
                         </div>
+                        <div class="input-group">
+                            <label>品牌名称</label>
+                            <input type="text" id="brand-name" maxlength="8" value="今日水印" placeholder="如：施工记录">
+                        </div>
+                        <div class="input-group">
+                            <label>品牌副标题</label>
+                            <input type="text" id="brand-subtitle" maxlength="6" value="相机" placeholder="如：项目现场">
+                        </div>
+                        <div class="input-group">
+                            <label>徽章文字</label>
+                            <input type="text" id="brand-badge" maxlength="6" value="真实可验" placeholder="如：现场记录">
+                        </div>
+                        <div class="input-group">
+                            <label>编号前缀</label>
+                            <input type="text" id="brand-code-label" maxlength="4" value="编号" placeholder="如：照片编号">
+                        </div>
+                        <p class="location-help">品牌和徽章均为可编辑的显示文字，照片编号用于查询本设备保存的照片。</p>
                         <div class="antifake-toggle-row">
                             <div class="antifake-toggle-info">
-                                <span class="antifake-toggle-title">防伪验证码</span>
-                                <span class="antifake-toggle-desc">每张照片生成唯一13位防伪码，可通过"照片验真"验证</span>
+                                <span class="antifake-toggle-title">照片编号</span>
+                                <span class="antifake-toggle-desc">每张照片生成唯一13位照片编号，可通过"真实可验"入口查找本设备保存的照片</span>
                             </div>
                             <label class="switch">
                                 <input type="checkbox" id="toggle-antifake" checked>
@@ -329,7 +353,7 @@
                             </label>
                         </div>
                         <div class="antifake-code-preview">
-                            <span class="antifake-code-label">当前防伪码预览：</span>
+                            <span class="antifake-code-label">当前照片编号预览：</span>
                             <span class="antifake-code-value" id="current-antifake-preview">—</span>
                         </div>
                     </div>
@@ -364,6 +388,9 @@
                     </div>
                 </div>
             </div>
+            <div class="settings-footer">
+                <button id="btn-save-watermark-settings" type="button">保存设置</button>
+            </div>
         </div>
 
         <!-- 拍照预览模态框 -->
@@ -379,14 +406,56 @@
             </div>
             <div class="preview-content">
                 <img id="preview-image" alt="预览图片">
+                <div id="preview-text-targets" class="watermark-text-targets"></div>
             </div>
             <div id="preview-antifake-info" class="preview-antifake-info">
                 <!-- 防伪信息动态生成 -->
             </div>
             <div class="preview-actions">
                 <button id="btn-retake" class="action-btn-secondary">重拍</button>
+                <button id="btn-edit-watermark" class="action-btn-secondary">编辑水印</button>
                 <button id="btn-share" class="action-btn-secondary">分享</button>
             </div>
+        </div>
+
+        <div id="edit-source-modal" class="edit-source-modal hidden">
+            <div class="edit-source-card">
+                <button id="btn-close-edit-source" class="close-btn" aria-label="关闭">&times;</button>
+                <h2>编辑照片水印</h2>
+                <p id="edit-source-description">选择本机照片或无水印原图，修改后保存副本。系统相册照片中已有的水印不会自动去除。</p>
+                <button id="btn-import-edit-photo" class="action-btn">从系统相册选择</button>
+                <button id="btn-select-local-photo" class="action-btn">选择本机照片</button>
+                <button id="btn-overlay-legacy-photo" class="action-btn hidden">在原照片上添加新水印</button>
+            </div>
+        </div>
+        <input id="edit-photo-file" type="file" accept="image/jpeg,image/png,image/webp" hidden>
+
+        <div id="photo-editor-modal" class="photo-editor-modal hidden">
+            <div class="preview-header">
+                <button id="btn-cancel-photo-edit" class="control-btn" aria-label="取消编辑">&times;</button>
+                <h2>编辑水印</h2>
+                <button id="btn-save-photo-edit" class="save-btn">保存副本</button>
+            </div>
+            <div class="photo-editor-image-area">
+                <img id="photo-editor-image" alt="水印编辑预览">
+                <div id="photo-editor-text-targets" class="watermark-text-targets"></div>
+            </div>
+            <div class="photo-editor-actions">
+                <span>点击水印文字修改，保存为副本</span>
+                <button id="btn-photo-edit-settings" class="action-btn-secondary">全部设置</button>
+            </div>
+        </div>
+
+        <div id="watermark-text-modal" class="watermark-text-modal hidden" role="dialog" aria-modal="true" aria-labelledby="watermark-text-title">
+            <form id="watermark-text-form" class="watermark-text-card">
+                <h2 id="watermark-text-title">修改水印文字</h2>
+                <div id="watermark-text-fields"></div>
+                <p id="watermark-text-help" class="location-help"></p>
+                <div class="watermark-text-actions">
+                    <button id="btn-cancel-watermark-text" type="button">取消</button>
+                    <button type="submit">完成</button>
+                </div>
+            </form>
         </div>
 
         <!-- 相册模态框 -->
@@ -421,8 +490,8 @@
                         </svg>
                     </div>
                     <div class="side-menu-info">
-                        <div class="side-menu-name">立即登录 ></div>
-                        <div class="side-menu-vip">开通VIP享更多功能</div>
+                        <div class="side-menu-name">相机用户</div>
+                        <div class="side-menu-description">用户编号：—</div>
                     </div>
                 </div>
                 <div class="side-menu-list">
@@ -432,11 +501,7 @@
                     </div>
                     <div class="side-menu-item" id="menu-verify">
                         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg>
-                        <span>照片验真</span>
-                    </div>
-                    <div class="side-menu-item" id="menu-team">
-                        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-                        <span>我的团队</span>
+                        <span>真实可验</span>
                     </div>
                     <div class="side-menu-item" id="menu-gallery">
                         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
@@ -448,16 +513,16 @@
                     </div>
                 </div>
                 <div class="side-menu-footer">
-                    <p>今日水印相机 v1.8.0</p>
+                    <p>今日水印相机 v1.9.9</p>
                 </div>
             </div>
         </div>
 
-        <!-- 照片验真模态框 -->
+        <!-- 本机记录查询模态框 -->
         <div id="verify-modal" class="verify-modal hidden">
             <div class="verify-modal-content">
                 <div class="verify-modal-header">
-                    <h2>照片验真</h2>
+                    <h2>真实可验</h2>
                     <button id="btn-close-verify" class="close-btn">&times;</button>
                 </div>
                 <div class="verify-modal-body">
@@ -467,16 +532,35 @@
                                 <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
                             </svg>
                         </div>
-                        <p>输入照片上的13位防伪码进行验证</p>
-                        <p class="verify-hint">防伪码位于照片右下角，格式如：ABCD1234EFGH5</p>
+                        <p>输入照片上的13位编号，查询本机保存记录</p>
+                        <p class="verify-hint">仅查询本机最近20张记录，不证明照片真实或未修改。删除记录后无法查询。</p>
+                        <p class="verify-hint">照片编号位于照片右下角，格式如：ABCD1234EFGH5</p>
                     </div>
                     <div class="verify-input-area">
-                        <input type="text" id="verify-code-input" placeholder="请输入13位防伪码" maxlength="13" autocomplete="off">
-                        <button id="btn-verify-code" class="verify-btn-action">立即验证</button>
+                        <input type="text" id="verify-code-input" placeholder="请输入13位照片编号" maxlength="13" autocomplete="off">
+                        <button id="btn-verify-code" class="verify-btn-action">查询记录</button>
                     </div>
                     <div id="verify-result" class="verify-result"></div>
                     <div id="verify-photo-thumb" class="verify-photo-thumb hidden"></div>
                 </div>
+            </div>
+        </div>
+
+        <!-- 个人资料 -->
+        <div id="profile-modal" class="profile-modal hidden">
+            <div class="profile-card">
+                <div class="profile-header">
+                    <h2>个人资料</h2>
+                    <button id="btn-close-profile" class="close-btn" aria-label="关闭个人资料">&times;</button>
+                </div>
+                <div id="profile-avatar" class="profile-avatar">相</div>
+                <form id="profile-form">
+                    <label for="profile-nickname">昵称</label>
+                    <input id="profile-nickname" type="text" maxlength="20" autocomplete="nickname" required>
+                    <div class="profile-detail"><span>用户编号</span><strong id="profile-user-id">—</strong></div>
+                    <div class="profile-detail"><span>本机照片</span><strong id="profile-photo-count">0 张</strong></div>
+                    <button type="submit" class="profile-save">保存资料</button>
+                </form>
             </div>
         </div>
 
@@ -496,7 +580,7 @@
                         </svg>
                     </div>
                     <h2 class="about-app-name">今日水印相机</h2>
-                    <p class="about-version">版本 v1.8.0</p>
+                    <p class="about-version">版本 v1.9.9</p>
                     <p class="about-slogan">记录每一刻的精彩</p>
                     <div class="about-features">
                         <div class="about-feature-item">
@@ -509,7 +593,7 @@
                         </div>
                         <div class="about-feature-item">
                             <span class="about-feature-icon">🛡️</span>
-                            <span>防伪验真系统</span>
+                            <span>本机照片记录</span>
                         </div>
                         <div class="about-feature-item">
                             <span class="about-feature-icon">🎨</span>
@@ -517,7 +601,7 @@
                         </div>
                         <div class="about-feature-item">
                             <span class="about-feature-icon">📹</span>
-                            <span>视频录制拼图</span>
+                            <span>照片拼图汇报</span>
                         </div>
                     </div>
                     <div class="about-links">
@@ -526,182 +610,6 @@
                         <div class="about-link" id="about-link-feedback">意见反馈</div>
                     </div>
                     <p class="about-copyright">© 2026 今日水印相机. All rights reserved.</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- 登录/注册模态框 -->
-        <div id="login-modal" class="login-modal hidden">
-            <div class="login-modal-content">
-                <div class="login-modal-header">
-                    <h2 id="login-title">登录</h2>
-                    <button class="close-btn login-close-btn">&times;</button>
-                </div>
-                <div class="login-body">
-                    <div class="login-tabs">
-                        <div class="login-tab active" data-tab="login">登录</div>
-                        <div class="login-tab" data-tab="register">注册</div>
-                    </div>
-                    <div class="login-form">
-                        <div class="login-input-group">
-                            <label>手机号 / 邮箱</label>
-                            <input type="text" id="login-account" placeholder="请输入手机号或邮箱" autocomplete="off">
-                        </div>
-                        <div class="login-input-group">
-                            <label>密码</label>
-                            <input type="password" id="login-password" placeholder="请输入密码" autocomplete="off">
-                        </div>
-                        <div class="login-input-group register-only hidden">
-                            <label>确认密码</label>
-                            <input type="password" id="login-confirm-password" placeholder="请再次输入密码" autocomplete="off">
-                        </div>
-                        <div class="login-input-group register-only hidden">
-                            <label>昵称</label>
-                            <input type="text" id="login-nickname" placeholder="请输入昵称" autocomplete="off">
-                        </div>
-                        <button id="btn-login-submit" class="login-submit-btn">登录</button>
-                        <p class="login-hint">登录后可同步照片、加入团队、解锁更多功能</p>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- VIP会员模态框 -->
-        <div id="vip-modal" class="vip-modal hidden">
-            <div class="vip-modal-content">
-                <div class="vip-modal-header">
-                    <button class="close-btn vip-close-btn">&times;</button>
-                </div>
-                <div class="vip-body">
-                    <div class="vip-hero">
-                        <div class="vip-crown">👑</div>
-                        <h2>开通VIP会员</h2>
-                        <p>解锁全部高级功能，畅享极致体验</p>
-                    </div>
-                    <div class="vip-benefits">
-                        <div class="vip-benefit-item">
-                            <span class="vip-benefit-icon">🎨</span>
-                            <div class="vip-benefit-text">
-                                <span class="vip-benefit-title">全部水印模板</span>
-                                <span class="vip-benefit-desc">解锁所有精美水印样式</span>
-                            </div>
-                        </div>
-                        <div class="vip-benefit-item">
-                            <span class="vip-benefit-icon">📸</span>
-                            <div class="vip-benefit-text">
-                                <span class="vip-benefit-title">无限照片存储</span>
-                                <span class="vip-benefit-desc">不限数量保存照片</span>
-                            </div>
-                        </div>
-                        <div class="vip-benefit-item">
-                            <span class="vip-benefit-icon">🎬</span>
-                            <div class="vip-benefit-text">
-                                <span class="vip-benefit-title">高清视频录制</span>
-                                <span class="vip-benefit-desc">无水印视频导出</span>
-                            </div>
-                        </div>
-                        <div class="vip-benefit-item">
-                            <span class="vip-benefit-icon">🏢</span>
-                            <div class="vip-benefit-text">
-                                <span class="vip-benefit-title">团队协作</span>
-                                <span class="vip-benefit-desc">创建团队共享照片</span>
-                            </div>
-                        </div>
-                        <div class="vip-benefit-item">
-                            <span class="vip-benefit-icon">☁️</span>
-                            <div class="vip-benefit-text">
-                                <span class="vip-benefit-title">云端同步</span>
-                                <span class="vip-benefit-desc">多设备数据同步</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="vip-plans">
-                        <div class="vip-plan" data-plan="monthly">
-                            <div class="vip-plan-badge"></div>
-                            <div class="vip-plan-name">月度会员</div>
-                            <div class="vip-plan-price">¥18<span>/月</span></div>
-                            <div class="vip-plan-desc">每月自动续费</div>
-                        </div>
-                        <div class="vip-plan popular" data-plan="yearly">
-                            <div class="vip-plan-badge">推荐</div>
-                            <div class="vip-plan-name">年度会员</div>
-                            <div class="vip-plan-price">¥128<span>/年</span></div>
-                            <div class="vip-plan-desc">低至¥10.7/月 省44%</div>
-                        </div>
-                        <div class="vip-plan" data-plan="lifetime">
-                            <div class="vip-plan-badge"></div>
-                            <div class="vip-plan-name">终身会员</div>
-                            <div class="vip-plan-price">¥298<span>一次性</span></div>
-                            <div class="vip-plan-desc">永久使用不限时</div>
-                        </div>
-                    </div>
-                    <button id="btn-vip-subscribe" class="vip-subscribe-btn">立即开通</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- 团队管理模态框 -->
-        <div id="team-modal" class="team-modal hidden">
-            <div class="team-modal-content">
-                <div class="team-modal-header">
-                    <h2>我的团队</h2>
-                    <button class="close-btn team-close-btn">&times;</button>
-                </div>
-                <div class="team-body">
-                    <div id="team-no-team" class="team-no-team">
-                        <div class="team-empty-icon">
-                            <svg viewBox="0 0 24 24" width="56" height="56" fill="currentColor" opacity="0.2">
-                                <path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/>
-                            </svg>
-                        </div>
-                        <p class="team-empty-title">还没有加入任何团队</p>
-                        <p class="team-empty-desc">创建团队或输入邀请码加入团队</p>
-                        <button id="btn-create-team" class="team-action-btn">创建团队</button>
-                        <button id="btn-join-team" class="team-action-btn-secondary">输入邀请码加入</button>
-                    </div>
-                    <div id="team-create-form" class="team-form hidden">
-                        <div class="team-form-input">
-                            <label>团队名称</label>
-                            <input type="text" id="team-name-input" placeholder="如：工程部一组" maxlength="20">
-                        </div>
-                        <div class="team-form-input">
-                            <label>团队描述（可选）</label>
-                            <input type="text" id="team-desc-input" placeholder="如：日常施工记录" maxlength="50">
-                        </div>
-                        <button id="btn-confirm-create-team" class="team-action-btn">确认创建</button>
-                    </div>
-                    <div id="team-join-form" class="team-form hidden">
-                        <div class="team-form-input">
-                            <label>团队邀请码</label>
-                            <input type="text" id="team-code-input" placeholder="请输入6位邀请码" maxlength="6">
-                        </div>
-                        <button id="btn-confirm-join-team" class="team-action-btn">确认加入</button>
-                    </div>
-                    <div id="team-info" class="team-info hidden">
-                        <div class="team-info-header">
-                            <div class="team-info-avatar">团</div>
-                            <div class="team-info-detail">
-                                <div class="team-info-name" id="team-info-name">—</div>
-                                <div class="team-info-desc" id="team-info-desc">—</div>
-                            </div>
-                        </div>
-                        <div class="team-invite-code">
-                            <span class="team-code-label">邀请码：</span>
-                            <span class="team-code-value" id="team-code-display">—</span>
-                            <button id="btn-copy-team-code" class="team-copy-btn">复制</button>
-                        </div>
-                        <div class="team-stats">
-                            <div class="team-stat">
-                                <span class="team-stat-num" id="team-stat-members">1</span>
-                                <span class="team-stat-label">成员</span>
-                            </div>
-                            <div class="team-stat">
-                                <span class="team-stat-num" id="team-stat-photos">0</span>
-                                <span class="team-stat-label">照片</span>
-                            </div>
-                        </div>
-                        <button id="btn-leave-team" class="team-leave-btn">退出团队</button>
-                    </div>
                 </div>
             </div>
         </div>
@@ -773,6 +681,9 @@
         <div id="toast" class="toast hidden"></div>
     </div>
 
+    <script src="vendor/capacitor.js"></script>
+    <script src="js/platform.js"></script>
+    <script src="js/location.js"></script>
     <script src="js/weather.js"></script>
     <script src="js/watermark.js"></script>
     <script src="js/camera.js"></script>

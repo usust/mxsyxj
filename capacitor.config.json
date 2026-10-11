@@ -4,20 +4,16 @@
   "webDir": "www",
   "server": {
     "androidScheme": "https",
-    "hostname": "localhost",
-    "port": 8080
+    "hostname": "localhost"
   },
   "android": {
-    "allowMixedContent": true,
+    "allowMixedContent": false,
     "captureInput": true,
     "webContentsDebuggingEnabled": false
   },
   "plugins": {
-    "Camera": {
-      "permissions": ["camera", "photos"]
-    },
-    "Geolocation": {
-      "permissions": ["location"]
+    "CapacitorHttp": {
+      "enabled": true
     }
   }
 }
