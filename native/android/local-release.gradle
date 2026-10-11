@@ -1,0 +1,15 @@
+// Supply the same private key for later updates. No key or password is bundled in source.
+def localKeyPath = System.getenv('MOXI_KEYSTORE_PATH')
+if (localKeyPath) {
+    android {
+        signingConfigs {
+            localRelease {
+                storeFile file(localKeyPath)
+                storePassword System.getenv('MOXI_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('MOXI_KEY_ALIAS') ?: 'moxi-local'
+                keyPassword System.getenv('MOXI_KEY_PASSWORD') ?: System.getenv('MOXI_KEYSTORE_PASSWORD')
+            }
+        }
+        buildTypes.release.signingConfig = signingConfigs.localRelease
+    }
+}
