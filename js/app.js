@@ -17,16 +17,20 @@ class App {
         this.currentZoom = 1;
         this.verifyModalOpen = false;
         this.currentMode = 'photo';
-        this.currentUser = null;
-        this.selectedVipPlan = 'yearly';
-        this.teamData = null;
         this.collageLayout = 2;
         this.collagePhotos = [];
         this.reportPhotos = [];
+        this.profile = this.loadProfile();
 
-        this.loadPhotosFromStorage();
-        this.loadUserFromStorage();
-        this.loadTeamFromStorage();
+        this.photoStore = new PhotoStore();
+    }
+
+    get watermark() {
+        return this.photoEditSession?.manager || this.cameraWatermark;
+    }
+
+    set watermark(manager) {
+        this.cameraWatermark = manager;
     }
 
     async init() {
@@ -35,7 +39,7 @@ class App {
         this.brandOverlay = document.getElementById('brand-overlay');
         this.bindEvents();
         this.updateWatermarkPreview();
-        this.updateLoginUI();
+        this.updateProfileUI();
 
         try {
             await this.camera.init();
@@ -48,11 +52,13 @@ class App {
         this.startTimeUpdateTimer();
 
         // 启动时自动获取定位
-        setTimeout(() => this.autoGetLocation(), 1000);
+        if (!this.watermark.config.useCustomLocation) {
+            setTimeout(() => { if (!this.photoEditSession) this.autoGetLocation(); }, 1000);
+        }
 
         // 启动时自动获取天气（如果是自动模式）
         if (this.watermark.config.weatherMode !== 'manual') {
-            setTimeout(() => this.refreshAutoWeather(), 2000);
+            setTimeout(() => { if (!this.photoEditSession && this.cameraWatermark.config.weatherMode !== 'manual') this.refreshAutoWeather(); }, 2000);
         }
     }
 
@@ -72,6 +78,12 @@ class App {
     }
 
     bindEvents() {
+        // Save immediately: Android can stop the process without beforeunload.
+        for (const event of ['input', 'change', 'click']) {
+            document.getElementById('settings-panel').addEventListener(event, () => {
+                queueMicrotask(() => this.saveSettings());
+            });
+        }
         // 侧边菜单
         document.getElementById('btn-menu').addEventListener('click', () => {
             this.openSideMenu();
@@ -80,13 +92,17 @@ class App {
         document.querySelector('.side-menu-overlay').addEventListener('click', () => {
             this.closeSideMenu();
         });
-
-        // 侧边菜单头部点击 - 登录/用户信息
         document.querySelector('.side-menu-header').addEventListener('click', () => {
-            if (!this.currentUser) {
-                this.closeSideMenu();
-                this.openLoginModal();
-            }
+            this.closeSideMenu();
+            this.openProfile();
+        });
+        document.getElementById('btn-close-profile').addEventListener('click', () => this.closeProfile());
+        document.getElementById('profile-modal').addEventListener('click', event => {
+            if (event.target.id === 'profile-modal') this.closeProfile();
+        });
+        document.getElementById('profile-form').addEventListener('submit', event => {
+            event.preventDefault();
+            this.saveProfile();
         });
 
         document.getElementById('menu-watermark').addEventListener('click', () => {
@@ -102,11 +118,6 @@ class App {
         document.getElementById('menu-verify').addEventListener('click', () => {
             this.closeSideMenu();
             this.openVerifyModal();
-        });
-
-        document.getElementById('menu-team').addEventListener('click', () => {
-            this.closeSideMenu();
-            this.openTeamModal();
         });
 
         document.getElementById('menu-about').addEventListener('click', () => {
@@ -164,7 +175,7 @@ class App {
             this.watermark.updateConfig('antiFakeEnabled', e.target.checked);
             this.updateWatermarkPreview();
             this.saveSettings();
-            this.showToast(e.target.checked ? '防伪码已开启' : '防伪码已关闭');
+            this.showToast(e.target.checked ? '照片编号已开启' : '照片编号已关闭');
         });
 
         // 切换摄像头
@@ -227,6 +238,91 @@ class App {
             this.sharePhoto();
         });
 
+        document.getElementById('btn-edit-watermark').addEventListener('click', () => {
+            this.editSelectedPhoto({
+                dataUrl: this.currentPhoto, originalDataUrl: this.currentOriginalPhoto,
+                watermarkConfig: this.currentWatermarkConfig, ...this.currentPhotoMeta
+            });
+        });
+        document.getElementById('btn-close-edit-source').addEventListener('click', () => this.closeEditSource());
+        document.getElementById('btn-import-edit-photo').addEventListener('click', () => document.getElementById('edit-photo-file').click());
+        document.getElementById('edit-photo-file').addEventListener('change', event => this.importEditPhoto(event.target));
+        document.getElementById('btn-select-local-photo').addEventListener('click', () => {
+            this.closeEditSource();
+            this.currentMode = 'edit';
+            this.openGallery();
+        });
+        document.getElementById('btn-overlay-legacy-photo').addEventListener('click', () => {
+            const photo = this.pendingLegacyPhoto;
+            this.closeEditSource();
+            if (photo) this.startPhotoEditor({ ...photo, originalDataUrl: photo.dataUrl });
+        });
+        document.getElementById('btn-cancel-photo-edit').addEventListener('click', () => this.closePhotoEditor());
+        document.getElementById('btn-save-photo-edit').addEventListener('click', () => this.saveEditedPhoto());
+        document.getElementById('btn-photo-edit-settings').addEventListener('click', () => this.toggleSettingsPanel(true));
+        for (const mode of ['preview', 'photo-editor']) {
+            const image = document.getElementById(`${mode}-image`);
+            const targets = document.getElementById(`${mode}-text-targets`);
+            image.addEventListener('load', () => this.updatePhotoTextTargets(mode));
+            new ResizeObserver(() => this.updatePhotoTextTargets(mode)).observe(image.parentElement);
+            targets.addEventListener('click', event => {
+                const field = event.target.closest('[data-field]')?.dataset.field;
+                if (!field) return;
+                if (mode === 'preview') {
+                    this.startPhotoEditor({ dataUrl: this.currentPhoto, originalDataUrl: this.currentOriginalPhoto,
+                        watermarkConfig: this.currentWatermarkConfig, ...this.currentPhotoMeta }, field);
+                } else this.openWatermarkTextEditor(field);
+            });
+        }
+        document.getElementById('btn-cancel-watermark-text').addEventListener('click', () => this.closeWatermarkTextEditor());
+        document.getElementById('watermark-text-modal').addEventListener('click', event => {
+            if (event.target.id === 'watermark-text-modal') this.closeWatermarkTextEditor();
+        });
+        document.getElementById('watermark-text-form').addEventListener('submit', event => {
+            event.preventDefault();
+            this.applyWatermarkTextEdit();
+        });
+        document.getElementById('watermark-text-form').addEventListener('input', () => this.applyWatermarkTextEdit(false));
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && this.editingWatermarkField) this.closeWatermarkTextEditor();
+            if (event.key === 'Tab' && this.editingWatermarkField) {
+                const fields = [...document.querySelectorAll('#watermark-text-form input, #watermark-text-form textarea, #watermark-text-form button')];
+                const next = event.shiftKey ? fields.at(-1) : fields[0];
+                if (document.activeElement === (event.shiftKey ? fields[0] : fields.at(-1))) {
+                    event.preventDefault(); next.focus();
+                }
+            }
+        });
+        for (const [id, key] of [['brand-name', 'brandName'], ['brand-subtitle', 'brandSubtitle'], ['brand-badge', 'brandBadge'], ['brand-code-label', 'brandCodeLabel']]) {
+            document.getElementById(id).addEventListener('input', event => {
+                this.watermark.updateConfig('brandEnabled', true);
+                document.getElementById('toggle-brand').checked = true;
+                this.watermark.updateConfig(key, event.target.value);
+                this.updateWatermarkPreview();
+            });
+        }
+
+        new ResizeObserver(() => this.updateWatermarkPreview()).observe(document.querySelector('.camera-container'));
+
+        document.getElementById('settings-panel').addEventListener('compositionend', event => {
+            if (event.target.matches('input, textarea')) event.target.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        document.getElementById('btn-save-watermark-settings').addEventListener('click', async event => {
+            const button = event.currentTarget;
+            if (this.savingEditedPhoto) return;
+            button.disabled = true;
+            try {
+                document.activeElement?.blur();
+                this.applySettingsInputs();
+                if (this.photoEditSession) await this.saveEditedPhoto();
+                else if (this.saveSettings()) {
+                    this.toggleSettingsPanel(false);
+                    this.updateWatermarkPreview();
+                    this.showToast('水印设置已保存并应用');
+                } else this.showToast('保存设置失败，请检查存储空间后重试');
+            } finally { button.disabled = false; }
+        });
+
         // 设置面板关闭
         document.getElementById('btn-close-settings').addEventListener('click', () => {
             this.toggleSettingsPanel(false);
@@ -266,19 +362,17 @@ class App {
             this.updateWatermarkPreview();
         });
 
-        document.getElementById('custom-date').addEventListener('change', (e) => {
-            const date = e.target.value;
-            const time = document.getElementById('custom-time').value || '12:00';
-            this.watermark.setCustomTime(date, time);
-            this.updateWatermarkPreview();
-        });
-
-        document.getElementById('custom-time').addEventListener('change', (e) => {
-            const time = e.target.value;
-            const date = document.getElementById('custom-date').value || this.getTodayDate();
-            this.watermark.setCustomTime(date, time);
-            this.updateWatermarkPreview();
-        });
+        for (const id of ['custom-date', 'custom-time']) {
+            for (const event of ['input', 'change']) document.getElementById(id).addEventListener(event, () => {
+                const date = document.getElementById('custom-date').value;
+                const time = document.getElementById('custom-time').value;
+                if (!date || !time) return;
+                this.watermark.updateConfig('useCustomTime', true);
+                document.getElementById('toggle-custom-time').checked = true;
+                this.watermark.setCustomTime(date, time);
+                this.updateWatermarkPreview();
+            });
+        }
 
         document.getElementById('btn-sync-time').addEventListener('click', () => {
             const { date, time } = this.watermark.syncCurrentTime();
@@ -289,12 +383,31 @@ class App {
         });
 
         // 位置设置
+        document.getElementById('btn-reference-watermark').addEventListener('click', () => {
+            this.watermark.updateConfigs({
+                template: 'default', position: 'bottom-left', fontSize: 'medium',
+                useCustomTime: true, useCustomLocation: true, showCoordinates: true,
+                useCustomText: false, weatherMode: 'manual',
+                brandEnabled: true, brandName: '今日水印', brandSubtitle: '相机',
+                brandBadge: '真实可验', brandCodeLabel: '防伪', antiFakeEnabled: true
+            });
+            this.watermark.setCustomTime('2026-10-09', '05:20');
+            this.watermark.setCustomLocation('', '南京市浦口区', '兰新路-道路停车位', '32.189802,118.714729');
+            this.watermark.setWeather(true, '轻度雾霾', '17°C');
+            this.loadSettings(this.watermark.getConfig());
+            this.updateWatermarkPreview();
+            this.saveSettings();
+            this.showToast('已填入参考图示例，可继续编辑');
+        });
+
+        window.addEventListener('resize', () => this.updateWatermarkPreview());
+
         document.getElementById('toggle-custom-location').addEventListener('change', (e) => {
             const enabled = e.target.checked;
             document.getElementById('location-settings').classList.toggle('hidden', !enabled);
             this.watermark.updateConfig('useCustomLocation', enabled);
             if (enabled) {
-                this.getCurrentLocation();
+                this.updateCustomLocation();
             } else {
                 this.watermark.updateConfig('customLocation', null);
                 this.updateWatermarkPreview();
@@ -303,8 +416,15 @@ class App {
 
         ['custom-province', 'custom-city', 'custom-address', 'custom-coords'].forEach(id => {
             document.getElementById(id).addEventListener('input', () => {
+                this.watermark.updateConfig('useCustomLocation', true);
+                document.getElementById('toggle-custom-location').checked = true;
                 this.updateCustomLocation();
             });
+        });
+
+        document.getElementById('toggle-coordinates').addEventListener('change', (e) => {
+            this.watermark.updateConfig('showCoordinates', e.target.checked);
+            this.updateWatermarkPreview();
         });
 
         document.getElementById('btn-get-location').addEventListener('click', () => {
@@ -350,6 +470,8 @@ class App {
         });
 
         document.getElementById('custom-text').addEventListener('input', (e) => {
+            this.watermark.updateConfig('useCustomText', true);
+            document.getElementById('toggle-custom-text').checked = true;
             this.watermark.updateConfig('customText', e.target.value);
             this.updateWatermarkPreview();
         });
@@ -381,9 +503,6 @@ class App {
                 switch (mode) {
                     case 'photo':
                         break;
-                    case 'video':
-                        this.openVideoMode();
-                        break;
                     case 'collage':
                         this.openCollageModal();
                         break;
@@ -399,16 +518,11 @@ class App {
 
         // 快捷操作
         document.querySelector('.quick-left').addEventListener('click', () => {
-            this.openLoginModal();
+            this.openProfile();
         });
 
         document.querySelector('.quick-right').addEventListener('click', () => {
-            this.openTeamModal();
-        });
-
-        // VIP标识
-        document.querySelector('.vip-badge').addEventListener('click', () => {
-            this.openVipModal();
+            this.toggleSettingsPanel(true);
         });
 
         // 关于页面模态框
@@ -419,73 +533,13 @@ class App {
             if (e.target.id === 'about-modal') this.closeAboutModal();
         });
         document.getElementById('about-link-privacy').addEventListener('click', () => {
-            this.showToast('隐私政策：我们严格保护您的个人隐私数据');
+            alert('照片和设置仅保存在本机，不上传。自动天气、地址解析和IP定位会向第三方服务发送坐标或IP；断网时可手动输入。清除应用数据会删除照片记录，已导出的系统相册照片不受影响。');
         });
         document.getElementById('about-link-terms').addEventListener('click', () => {
-            this.showToast('用户协议：使用本应用即表示同意服务条款');
+            alert('本应用无需登录和付费。个人资料仅保存在本机，不用于账号认证。本机编号只用于查询保存记录，不证明拍摄时间、地点或照片真实。时间和位置可由用户自定义。');
         });
         document.getElementById('about-link-feedback').addEventListener('click', () => {
-            this.showToast('感谢反馈！请发送邮件至 support@moxi.camera');
-        });
-
-        // 登录/注册模态框
-        document.querySelector('.login-close-btn').addEventListener('click', () => {
-            this.closeLoginModal();
-        });
-        document.getElementById('login-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'login-modal') this.closeLoginModal();
-        });
-        document.querySelectorAll('.login-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                this.switchLoginTab(tab.dataset.tab);
-            });
-        });
-        document.getElementById('btn-login-submit').addEventListener('click', () => {
-            this.handleLoginSubmit();
-        });
-
-        // VIP模态框
-        document.querySelector('.vip-close-btn').addEventListener('click', () => {
-            this.closeVipModal();
-        });
-        document.getElementById('vip-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'vip-modal') this.closeVipModal();
-        });
-        document.querySelectorAll('.vip-plan').forEach(plan => {
-            plan.addEventListener('click', () => {
-                document.querySelectorAll('.vip-plan').forEach(p => p.classList.remove('selected'));
-                plan.classList.add('selected');
-                this.selectedVipPlan = plan.dataset.plan;
-            });
-        });
-        document.getElementById('btn-vip-subscribe').addEventListener('click', () => {
-            this.handleVipSubscribe();
-        });
-
-        // 团队模态框
-        document.querySelector('.team-close-btn').addEventListener('click', () => {
-            this.closeTeamModal();
-        });
-        document.getElementById('team-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'team-modal') this.closeTeamModal();
-        });
-        document.getElementById('btn-create-team').addEventListener('click', () => {
-            this.showTeamForm('create');
-        });
-        document.getElementById('btn-join-team').addEventListener('click', () => {
-            this.showTeamForm('join');
-        });
-        document.getElementById('btn-confirm-create-team').addEventListener('click', () => {
-            this.handleCreateTeam();
-        });
-        document.getElementById('btn-confirm-join-team').addEventListener('click', () => {
-            this.handleJoinTeam();
-        });
-        document.getElementById('btn-copy-team-code').addEventListener('click', () => {
-            this.copyTeamCode();
-        });
-        document.getElementById('btn-leave-team').addEventListener('click', () => {
-            this.handleLeaveTeam();
+            this.showToast('请向提供安装包的项目维护者反馈问题');
         });
 
         // 拼图模态框
@@ -530,8 +584,8 @@ class App {
         const mode = this.watermark.config.weatherMode || 'auto';
 
         if (mode === 'manual') {
-            const text = document.getElementById('custom-weather').value || '晴';
-            const temp = document.getElementById('custom-temp').value || '27°C';
+            const text = document.getElementById('custom-weather').value;
+            const temp = document.getElementById('custom-temp').value;
             this.watermark.setWeather(enabled, text, temp);
         } else {
             // 自动模式：使用已缓存的天气数据
@@ -574,6 +628,7 @@ class App {
      * 刷新自动天气获取
      */
     async refreshAutoWeather() {
+        const manager = this.watermark;
         const descEl = document.getElementById('weather-auto-desc');
         const detailEl = document.getElementById('weather-auto-detail');
         const iconEl = document.getElementById('weather-auto-icon');
@@ -594,15 +649,17 @@ class App {
 
         // 如果没有坐标，尝试通过定位获取
         if (!lat || !lon) {
-            if (navigator.geolocation) {
+            if (DevicePlatform.native || navigator.geolocation) {
                 descEl.textContent = '正在获取定位...';
-                navigator.geolocation.getCurrentPosition(
+                DevicePlatform.getCurrentPosition(
                     async (position) => {
+                        if (manager !== this.watermark) return;
                         lat = position.coords.latitude;
                         lon = position.coords.longitude;
                         await this._fetchAndDisplayWeather(lat, lon, descEl, detailEl, iconEl, refreshBtn);
                     },
                     async (err) => {
+                        if (manager !== this.watermark) return;
                         // 定位失败，尝试用wttr.in基于IP获取
                         descEl.textContent = '定位失败，尝试基于IP获取...';
                         await this._fetchWeatherByIP(descEl, detailEl, iconEl, refreshBtn);
@@ -621,8 +678,10 @@ class App {
      * 获取并显示天气
      */
     async _fetchAndDisplayWeather(lat, lon, descEl, detailEl, iconEl, refreshBtn) {
+        const manager = this.watermark;
         try {
             const weather = await this.weather.getWeatherByCoords(lat, lon);
+            if (manager !== this.watermark) return;
             if (weather) {
                 this.watermark.setWeatherFromAuto(weather);
                 this.updateAutoWeatherDisplay();
@@ -645,6 +704,7 @@ class App {
      * 基于IP获取天气（定位失败时的备用方案）
      */
     async _fetchWeatherByIP(descEl, detailEl, iconEl, refreshBtn) {
+        const manager = this.watermark;
         try {
             // 使用wttr.in自动检测位置
             const url = 'https://wttr.in/?format=j1';
@@ -655,6 +715,7 @@ class App {
             });
             if (!response.ok) throw new Error('IP天气获取失败');
             const data = await response.json();
+            if (manager !== this.watermark) return;
             if (data && data.current_condition && data.current_condition[0]) {
                 const cur = data.current_condition[0];
                 const temp = parseInt(cur.temp_C) || 27;
@@ -715,8 +776,10 @@ class App {
      * 定位成功后自动获取天气
      */
     async _fetchWeatherAfterLocation(lat, lon) {
+        const manager = this.watermark;
         try {
             const weather = await this.weather.getWeatherByCoords(lat, lon);
+            if (manager !== this.watermark) return;
             if (weather) {
                 this.watermark.setWeatherFromAuto(weather);
                 this.updateAutoWeatherDisplay();
@@ -752,13 +815,17 @@ class App {
     }
 
     updateWatermarkPreview() {
+        if (this.photoEditSession) {
+            this.renderPhotoEdit();
+            return;
+        }
         if (this.watermarkOverlay) {
             this.watermark.updatePreview(this.watermarkOverlay);
         }
         if (this.brandOverlay) {
             this.watermark.updateBrandPreview(this.brandOverlay);
         }
-        // 更新设置面板中的防伪码预览
+        // 更新设置面板中的照片编号预览
         const previewEl = document.getElementById('current-antifake-preview');
         if (previewEl) {
             previewEl.textContent = this.watermark.getAntiFakeCode();
@@ -766,7 +833,10 @@ class App {
     }
 
     startTimeUpdateTimer() {
+        clearInterval(this.watermarkUpdateInterval);
+        clearInterval(this.weatherRefreshInterval);
         this.watermarkUpdateInterval = setInterval(() => {
+            if (this.photoEditSession) return;
             if (!this.watermark.config.useCustomTime) {
                 this.updateWatermarkPreview();
             }
@@ -774,6 +844,7 @@ class App {
 
         // 每10分钟自动刷新天气
         this.weatherRefreshInterval = setInterval(() => {
+            if (this.photoEditSession) return;
             if (this.watermark.config.weatherMode !== 'manual' && 
                 this.watermark.config.weather?.enabled !== false) {
                 this.refreshAutoWeather();
@@ -792,7 +863,7 @@ class App {
             const prevTransform = video.style.transform;
             video.style.transform = '';
 
-            // 为本次拍照生成新的防伪码
+            // 为本次拍照生成新的照片编号
             const antiFakeCode = this.watermark.generateAntiFakeCode();
             const captureTime = new Date().toISOString();
             const location = this.watermark.getLocation();
@@ -800,6 +871,8 @@ class App {
 
             const dataUrl = this.camera.capture(this.watermark);
             this.currentPhoto = dataUrl;
+            this.currentOriginalPhoto = this.camera.lastOriginalPhoto;
+            this.currentWatermarkConfig = this.snapshotWatermarkConfig();
             this.currentPhotoMeta = {
                 antiFakeCode: antiFakeCode,
                 captureTime: captureTime,
@@ -822,7 +895,7 @@ class App {
                 captureBtn.classList.remove('capturing');
             }, 300);
 
-            // 拍照后生成新的防伪码供下次使用
+            // 拍照后生成新的照片编号供下次使用
             this.watermark.generateAntiFakeCode();
             this.updateWatermarkPreview();
         } catch (err) {
@@ -841,14 +914,14 @@ class App {
             infoEl.innerHTML = `
                 <div class="antifake-row">
                     <span class="antifake-icon">✓</span>
-                    <span class="antifake-label">防伪验证</span>
+                    <span class="antifake-label">真实可验</span>
                     <span class="antifake-code">${meta.antiFakeCode}</span>
                 </div>
                 <div class="antifake-detail">
                     <span>拍摄时间：${meta.watermarkTime || '—'}</span>
                 </div>
                 <div class="antifake-detail">
-                    <span>拍摄位置：${meta.location || '—'}</span>
+                    <span>拍摄位置：${this.watermark.escapeHTML(meta.location || '—')}</span>
                 </div>
                 <div class="antifake-detail">
                     <span>天气信息：${meta.weather || '—'}</span>
@@ -882,6 +955,8 @@ class App {
         document.getElementById('preview-modal').classList.add('hidden');
         this.currentPhoto = null;
         this.currentPhotoMeta = null;
+        this.currentOriginalPhoto = null;
+        this.currentWatermarkConfig = null;
     }
 
     /**
@@ -912,7 +987,7 @@ class App {
     }
 
     /**
-     * 通过防伪码验证照片
+     * 通过照片编号验证照片
      */
     verifyPhotoByCode() {
         const inputEl = document.getElementById('verify-code-input');
@@ -920,26 +995,26 @@ class App {
         const code = inputEl ? inputEl.value.trim().toUpperCase() : '';
 
         if (!code) {
-            this.showVerifyResult('error', '请输入防伪码', '防伪码不能为空');
+            this.showVerifyResult('error', '请输入照片编号', '照片编号不能为空');
             return;
         }
 
-        if (code.length < 12) {
-            this.showVerifyResult('error', '防伪码格式错误', '防伪码应为13位字符');
+        if (!/^[A-Z0-9]{13}$/.test(code)) {
+            this.showVerifyResult('error', '照片编号格式错误', '照片编号应为13位字符');
             return;
         }
 
-        // 在已保存的照片中查找匹配的防伪码
+        // 在已保存的照片中查找匹配的照片编号
         const matchedPhoto = this.photos.find(p => p.antiFakeCode === code);
 
         if (matchedPhoto) {
             const captureDate = new Date(matchedPhoto.timestamp);
             const dateStr = `${captureDate.getFullYear()}-${String(captureDate.getMonth() + 1).padStart(2, '0')}-${String(captureDate.getDate()).padStart(2, '0')} ${String(captureDate.getHours()).padStart(2, '0')}:${String(captureDate.getMinutes()).padStart(2, '0')}`;
-            this.showVerifyResult('success', '验证通过', `
-                <div class="verify-detail-row"><span class="verify-detail-label">防伪码</span><span class="verify-detail-value">${matchedPhoto.antiFakeCode}</span></div>
+            this.showVerifyResult('success', '找到照片记录', `
+                <div class="verify-detail-row"><span class="verify-detail-label">照片编号</span><span class="verify-detail-value">${matchedPhoto.antiFakeCode}</span></div>
                 <div class="verify-detail-row"><span class="verify-detail-label">保存时间</span><span class="verify-detail-value">${dateStr}</span></div>
                 <div class="verify-detail-row"><span class="verify-detail-label">水印时间</span><span class="verify-detail-value">${matchedPhoto.watermarkTime || '—'}</span></div>
-                <div class="verify-detail-row"><span class="verify-detail-label">拍摄位置</span><span class="verify-detail-value">${matchedPhoto.location || '—'}</span></div>
+                <div class="verify-detail-row"><span class="verify-detail-label">拍摄位置</span><span class="verify-detail-value">${this.watermark.escapeHTML(matchedPhoto.location || '—')}</span></div>
             `);
             // 显示匹配的照片缩略图
             const thumbEl = document.getElementById('verify-photo-thumb');
@@ -948,7 +1023,7 @@ class App {
                 thumbEl.classList.remove('hidden');
             }
         } else {
-            this.showVerifyResult('error', '验证未通过', `未找到防伪码 <strong>${code}</strong> 对应的照片记录。请确认防伪码是否正确，或该照片是否在本设备上拍摄保存。`);
+            this.showVerifyResult('error', '未找到照片记录', `未找到照片编号 <strong>${code}</strong> 对应的照片记录。请确认照片编号是否正确，或该照片是否在本设备上拍摄保存。`);
             const thumbEl = document.getElementById('verify-photo-thumb');
             if (thumbEl) {
                 thumbEl.innerHTML = '';
@@ -963,6 +1038,9 @@ class App {
     showVerifyResult(type, title, detail) {
         const resultEl = document.getElementById('verify-result');
         if (!resultEl) return;
+        if (type !== 'success') {
+            document.getElementById('verify-photo-thumb').classList.add('hidden');
+        }
         const icon = type === 'success' ? '✓' : '✗';
         resultEl.innerHTML = `
             <div class="verify-result-card verify-${type}">
@@ -973,64 +1051,118 @@ class App {
         `;
     }
 
-    savePhoto() {
-        if (!this.currentPhoto) {
-            this.showToast('没有可保存的照片');
-            return;
-        }
-
+    async savePhoto() {
+        if (!this.currentPhoto || this.savingPhoto) return;
+        this.savingPhoto = true;
+        const button = document.getElementById('btn-save');
+        button.disabled = true;
         const photo = {
             id: Date.now(),
             dataUrl: this.currentPhoto,
+            originalDataUrl: this.currentOriginalPhoto || null,
+            watermarkConfig: this.currentWatermarkConfig || null,
             timestamp: new Date().toISOString(),
-            antiFakeCode: this.currentPhotoMeta ? this.currentPhotoMeta.antiFakeCode : '',
-            location: this.currentPhotoMeta ? this.currentPhotoMeta.location : '',
-            watermarkTime: this.currentPhotoMeta ? this.currentPhotoMeta.watermarkTime : '',
-            weather: this.currentPhotoMeta ? this.currentPhotoMeta.weather : ''
+            antiFakeCode: this.currentPhotoMeta?.antiFakeCode || '',
+            location: this.currentPhotoMeta?.location || '',
+            watermarkTime: this.currentPhotoMeta?.watermarkTime || '',
+            weather: this.currentPhotoMeta?.weather || '',
+            weatherDetail: this.currentPhotoMeta?.weatherDetail || null
         };
-        this.photos.unshift(photo);
-        this.savePhotosToStorage();
-        this.updateGalleryThumbnail();
-        this.downloadPhoto(this.currentPhoto);
-        this.showToast('照片已保存（含防伪信息）');
-        this.closePreview();
+        try {
+            await this.downloadPhoto(photo.dataUrl);
+            const nextPhotos = [photo, ...this.photos].slice(0, 20);
+            try {
+                await this.photoStore.replace(nextPhotos);
+                this.photos = nextPhotos;
+                this.updateGalleryThumbnail();
+                this.showToast('照片已保存到系统相册和照片记录');
+            } catch (err) {
+                console.error('照片记录保存失败:', err);
+                this.showToast('照片已导出，但照片记录保存失败，请检查存储空间');
+            }
+            this.closePreview();
+        } catch (err) {
+            console.error('保存照片失败:', err);
+            this.showToast('保存失败，请检查存储空间后重试');
+        } finally {
+            this.savingPhoto = false;
+            button.disabled = false;
+        }
     }
 
-    downloadPhoto(dataUrl) {
-        const link = document.createElement('a');
-        const now = new Date();
-        const fileName = `moxi_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.jpg`;
-        link.download = fileName;
-        link.href = dataUrl;
-        link.click();
+    async downloadPhoto(dataUrl) {
+        return DevicePlatform.saveImage(dataUrl, `moxi_${Date.now()}.jpg`);
     }
 
     async sharePhoto() {
         if (!this.currentPhoto) return;
         try {
-            if (navigator.share) {
-                const response = await fetch(this.currentPhoto);
-                const blob = await response.blob();
-                const file = new File([blob], 'moxi_photo.jpg', { type: 'image/jpeg' });
-                await navigator.share({
-                    title: '今日水印相机',
-                    text: '使用今日水印相机拍摄',
-                    files: [file]
-                });
-            } else {
-                this.downloadPhoto(this.currentPhoto);
-                this.showToast('已保存到本地');
-            }
+            await DevicePlatform.shareImage(this.currentPhoto);
         } catch (err) {
-            if (err.name !== 'AbortError') {
-                this.showToast('分享失败，已保存到本地');
-                this.downloadPhoto(this.currentPhoto);
+            if (err.name !== 'AbortError' && !/cancel/i.test(err.message)) {
+                console.error('分享失败:', err);
+                this.showToast('分享失败，请保存照片后从系统相册分享');
             }
         }
     }
 
     openSideMenu() {
         document.getElementById('side-menu').classList.remove('hidden');
+    }
+
+    loadProfile() {
+        try {
+            const saved = JSON.parse(localStorage.getItem('moxi_profile') || 'null');
+            if (saved && typeof saved.nickname === 'string' && /^MX\d{6}$/.test(saved.id)) {
+                return { id: saved.id, nickname: saved.nickname.slice(0, 20) || '相机用户' };
+            }
+            const previous = JSON.parse(localStorage.getItem('moxi_user') || 'null');
+            const profile = {
+                id: `MX${100000 + crypto.getRandomValues(new Uint32Array(1))[0] % 900000}`,
+                nickname: typeof previous?.nickname === 'string' ? previous.nickname.slice(0, 20) : '相机用户'
+            };
+            localStorage.setItem('moxi_profile', JSON.stringify(profile));
+            return profile;
+        } catch {
+            return { id: 'MX100000', nickname: '相机用户' };
+        }
+    }
+
+    updateProfileUI() {
+        document.querySelector('.quick-left').textContent = `${this.profile.nickname} >`;
+        document.querySelector('.side-menu-name').textContent = this.profile.nickname;
+        document.querySelector('.side-menu-description').textContent = `用户编号：${this.profile.id}`;
+        document.querySelector('.side-menu-avatar').textContent = Array.from(this.profile.nickname)[0];
+        document.getElementById('profile-avatar').textContent = Array.from(this.profile.nickname)[0];
+        document.getElementById('profile-user-id').textContent = this.profile.id;
+    }
+
+    openProfile() {
+        document.getElementById('profile-nickname').value = this.profile.nickname;
+        document.getElementById('profile-photo-count').textContent = `${this.photos.length} 张`;
+        document.getElementById('profile-modal').classList.remove('hidden');
+    }
+
+    closeProfile() {
+        document.getElementById('profile-modal').classList.add('hidden');
+    }
+
+    saveProfile() {
+        const nickname = document.getElementById('profile-nickname').value.trim();
+        if (!nickname) {
+            this.showToast('请输入昵称');
+            return;
+        }
+        const profile = { ...this.profile, nickname: nickname.slice(0, 20) };
+        try {
+            localStorage.setItem('moxi_profile', JSON.stringify(profile));
+            this.profile = profile;
+            this.updateProfileUI();
+            this.closeProfile();
+            this.showToast('个人资料已保存');
+        } catch {
+            this.showToast('保存失败，请检查设备存储');
+        }
     }
 
     closeSideMenu() {
@@ -1071,7 +1203,13 @@ class App {
                         e.stopPropagation();
                         this.deletePhoto(parseInt(item.dataset.id));
                     } else {
-                        this.viewPhoto(parseInt(item.dataset.id));
+                        const id = parseInt(item.dataset.id);
+                        if (this.currentMode === 'edit') {
+                            this.closeGallery();
+                            this.editSelectedPhoto(this.photos.find(photo => photo.id === id));
+                        } else {
+                            this.viewPhoto(id);
+                        }
                     }
                 });
             });
@@ -1082,12 +1220,15 @@ class App {
 
     closeGallery() {
         document.getElementById('gallery-modal').classList.add('hidden');
+        if (this.currentMode === 'edit') this.switchToPhotoMode();
     }
 
     viewPhoto(id) {
         const photo = this.photos.find(p => p.id === id);
         if (photo) {
             this.currentPhoto = photo.dataUrl;
+            this.currentOriginalPhoto = photo.originalDataUrl || null;
+            this.currentWatermarkConfig = photo.watermarkConfig || null;
             this.currentPhotoMeta = {
                 antiFakeCode: photo.antiFakeCode || '',
                 captureTime: photo.timestamp || '',
@@ -1102,25 +1243,33 @@ class App {
         }
     }
 
-    deletePhoto(id) {
-        this.photos = this.photos.filter(p => p.id !== id);
-        this.savePhotosToStorage();
-        this.updateGalleryThumbnail();
-        this.openGallery();
-        this.showToast('已删除');
+    async deletePhoto(id) {
+        const nextPhotos = this.photos.filter(p => p.id !== id);
+        try {
+            await this.photoStore.replace(nextPhotos);
+            this.photos = nextPhotos;
+            this.updateGalleryThumbnail();
+            this.openGallery();
+            this.showToast('已删除照片记录，系统相册照片保留');
+        } catch (err) {
+            this.showToast('删除失败，请重试');
+        }
     }
 
-    clearGallery() {
+    async clearGallery() {
         if (this.photos.length === 0) {
             this.showToast('相册已为空');
             return;
         }
-        if (confirm('确定要清空所有照片吗？')) {
+        if (!confirm('清空照片记录？系统相册照片仍保留，编号将无法在本机查询。')) return;
+        try {
+            await this.photoStore.replace([]);
             this.photos = [];
-            this.savePhotosToStorage();
             this.updateGalleryThumbnail();
             this.openGallery();
-            this.showToast('已清空相册');
+            this.showToast('已清空照片记录');
+        } catch (err) {
+            this.showToast('清空失败，请重试');
         }
     }
 
@@ -1138,9 +1287,10 @@ class App {
     }
 
     getCurrentLocation() {
+        const manager = this.watermark;
         const statusEl = document.getElementById('location-status');
         
-        if (!navigator.geolocation) {
+        if (!DevicePlatform.native && !navigator.geolocation) {
             statusEl.textContent = '您的浏览器不支持定位功能';
             statusEl.className = 'location-status error';
             return;
@@ -1149,43 +1299,22 @@ class App {
         statusEl.textContent = '正在获取定位...';
         statusEl.className = 'location-status loading';
 
-        navigator.geolocation.getCurrentPosition(
+        DevicePlatform.getCurrentPosition(
             (position) => {
-                const lat = position.coords.latitude.toFixed(4);
-                const lon = position.coords.longitude.toFixed(4);
+                if (manager !== this.watermark) return;
+                const lat = position.coords.latitude.toFixed(6);
+                const lon = position.coords.longitude.toFixed(6);
                 
                 this.reverseGeocode(lat, lon).then(address => {
-                    if (address) {
-                        document.getElementById('custom-province').value = address.province || '';
-                        document.getElementById('custom-city').value = address.city || '';
-                        document.getElementById('custom-address').value = address.address || '';
-                        document.getElementById('custom-coords').value = `${lat},${lon}`;
-                        
-                        this.updateCustomLocation();
-                        statusEl.textContent = `定位成功: ${address.full || lat + ',' + lon}`;
-                        statusEl.className = 'location-status success';
-                    } else {
-                        document.getElementById('custom-coords').value = `${lat},${lon}`;
-                        this.updateCustomLocation();
-                        statusEl.textContent = `定位成功: ${lat},${lon}`;
-                        statusEl.className = 'location-status success';
-                    }
-                    // 定位成功后自动获取天气（仅自动模式）
-                    if (this.watermark.config.weatherMode === 'auto') {
-                        this._fetchWeatherAfterLocation(parseFloat(lat), parseFloat(lon));
-                    }
+                    if (manager !== this.watermark) return;
+                    this._applyLocationResult(lat, lon, address, manager, position.coords.accuracy);
                 }).catch(() => {
-                    document.getElementById('custom-coords').value = `${lat},${lon}`;
-                    this.updateCustomLocation();
-                    statusEl.textContent = `定位成功: ${lat},${lon}`;
-                    statusEl.className = 'location-status success';
-                    // 定位成功后自动获取天气
-                    if (this.watermark.config.weatherMode === 'auto') {
-                        this._fetchWeatherAfterLocation(parseFloat(lat), parseFloat(lon));
-                    }
+                    if (manager !== this.watermark) return;
+                    this._applyLocationResult(lat, lon, null, manager, position.coords.accuracy);
                 });
             },
             (err) => {
+                if (manager !== this.watermark) return;
                 let msg = '定位失败';
                 switch (err.code) {
                     case 1: msg = '定位权限被拒绝'; break;
@@ -1195,9 +1324,9 @@ class App {
                 statusEl.textContent = msg + '，请手动输入位置';
                 statusEl.className = 'location-status error';
                 // 定位失败时尝试IP定位
-                this._fallbackIPLocation();
+                this._fallbackIPLocation(manager);
             },
-            { enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 }
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
         );
     }
 
@@ -1205,14 +1334,13 @@ class App {
      * 应用定位结果到水印（自动模式专用）
      * 关键：自动设置 useCustomLocation = true 并勾选开关
      */
-    _applyLocationResult(lat, lon, address) {
+    _applyLocationResult(lat, lon, address, manager = this.cameraWatermark, accuracy = null) {
+        if (manager !== this.watermark) return;
         // 填充表单
         document.getElementById('custom-coords').value = `${lat},${lon}`;
-        if (address) {
-            document.getElementById('custom-province').value = address.province || '';
-            document.getElementById('custom-city').value = address.city || '';
-            document.getElementById('custom-address').value = address.address || '';
-        }
+        document.getElementById('custom-province').value = address?.province || '';
+        document.getElementById('custom-city').value = address?.city || '';
+        document.getElementById('custom-address').value = address?.address || '';
 
         // 关键修复：启用自定义位置，否则 getLocation() 返回空
         this.watermark.updateConfig('useCustomLocation', true);
@@ -1225,6 +1353,12 @@ class App {
         }
 
         this.updateCustomLocation();
+        const statusEl = document.getElementById('location-status');
+        const precision = Number.isFinite(accuracy) && accuracy > 0 ? `（定位精度约${Math.round(accuracy)}米）` : '';
+        statusEl.textContent = address?.source === 'ip'
+            ? '仅获取到大致城市，请补充街道、门牌和地点名称。'
+            : (address ? `已获取地址${precision}，可继续补充楼栋和房间号。` : '已获取坐标，未查到地址，请手动补充。');
+        statusEl.className = address && address.source !== 'ip' ? 'location-status success' : 'location-status';
 
         // 自动获取天气
         if (this.watermark.config.weatherMode === 'auto') {
@@ -1236,28 +1370,34 @@ class App {
      * 启动时自动获取定位（静默模式，不显示状态）
      */
     autoGetLocation() {
-        if (!navigator.geolocation) {
+        const manager = this.cameraWatermark;
+        if (this.photoEditSession || manager.config.useCustomLocation) return;
+        if (!DevicePlatform.native && !navigator.geolocation) {
             // 浏览器不支持定位，直接走IP定位
-            this._fallbackIPLocation();
+            this._fallbackIPLocation(manager, true);
             return;
         }
 
         // 先尝试低精度快速定位
-        navigator.geolocation.getCurrentPosition(
+        DevicePlatform.getCurrentPosition(
             (position) => {
-                const lat = position.coords.latitude.toFixed(4);
-                const lon = position.coords.longitude.toFixed(4);
+                if (manager !== this.watermark || manager.config.useCustomLocation) return;
+                const lat = position.coords.latitude.toFixed(6);
+                const lon = position.coords.longitude.toFixed(6);
 
                 this.reverseGeocode(lat, lon).then(address => {
-                    this._applyLocationResult(lat, lon, address);
+                    if (manager !== this.watermark || manager.config.useCustomLocation) return;
+                    this._applyLocationResult(lat, lon, address, manager, position.coords.accuracy);
                 }).catch(() => {
-                    this._applyLocationResult(lat, lon, null);
+                    if (manager !== this.watermark || manager.config.useCustomLocation) return;
+                    this._applyLocationResult(lat, lon, null, manager, position.coords.accuracy);
                 });
             },
             (err) => {
+                if (manager !== this.watermark || manager.config.useCustomLocation) return;
                 console.warn('自动定位失败:', err.message);
                 // 尝试高精度定位
-                this._retryHighAccuracyLocation();
+                this._retryHighAccuracyLocation(manager);
             },
             { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 }
         );
@@ -1266,27 +1406,32 @@ class App {
     /**
      * 高精度定位重试
      */
-    _retryHighAccuracyLocation() {
-        if (!navigator.geolocation) {
-            this._fallbackIPLocation();
+    _retryHighAccuracyLocation(manager = this.cameraWatermark) {
+        if (manager !== this.watermark || manager.config.useCustomLocation) return;
+        if (!DevicePlatform.native && !navigator.geolocation) {
+            this._fallbackIPLocation(manager, true);
             return;
         }
 
-        navigator.geolocation.getCurrentPosition(
+        DevicePlatform.getCurrentPosition(
             (position) => {
-                const lat = position.coords.latitude.toFixed(4);
-                const lon = position.coords.longitude.toFixed(4);
+                if (manager !== this.watermark || manager.config.useCustomLocation) return;
+                const lat = position.coords.latitude.toFixed(6);
+                const lon = position.coords.longitude.toFixed(6);
 
                 this.reverseGeocode(lat, lon).then(address => {
-                    this._applyLocationResult(lat, lon, address);
+                    if (manager !== this.watermark || manager.config.useCustomLocation) return;
+                    this._applyLocationResult(lat, lon, address, manager, position.coords.accuracy);
                 }).catch(() => {
-                    this._applyLocationResult(lat, lon, null);
+                    if (manager !== this.watermark || manager.config.useCustomLocation) return;
+                    this._applyLocationResult(lat, lon, null, manager, position.coords.accuracy);
                 });
             },
             (err) => {
+                if (manager !== this.watermark || manager.config.useCustomLocation) return;
                 console.warn('高精度定位也失败:', err.message);
                 // 最终备用：IP定位
-                this._fallbackIPLocation();
+                this._fallbackIPLocation(manager, true);
             },
             { enableHighAccuracy: true, timeout: 12000, maximumAge: 300000 }
         );
@@ -1295,7 +1440,9 @@ class App {
     /**
      * IP定位备用方案（通过免费API获取大致位置）
      */
-    async _fallbackIPLocation() {
+    async _fallbackIPLocation(manager = this.cameraWatermark, automatic = false) {
+        const canApply = () => manager === this.watermark && (!automatic || !manager.config.useCustomLocation);
+        if (!canApply()) return;
         // 方案1: ipapi.co
         try {
             const response = await fetch('https://ipapi.co/json/', {
@@ -1304,15 +1451,16 @@ class App {
             });
             if (!response.ok) throw new Error('ipapi response not ok');
             const data = await response.json();
+            if (!canApply()) return;
             if (data && data.latitude && data.longitude) {
                 const lat = data.latitude.toFixed(4);
                 const lon = data.longitude.toFixed(4);
                 const address = data.city ? {
                     province: data.region || '',
                     city: data.city || '',
-                    address: ''
+                    address: '', source: 'ip'
                 } : null;
-                this._applyLocationResult(lat, lon, address);
+                this._applyLocationResult(lat, lon, address, manager);
                 console.log('IP定位成功(ipapi.co):', data.city);
                 return;
             }
@@ -1320,6 +1468,7 @@ class App {
             console.warn('ipapi.co定位失败:', err.message);
         }
 
+        if (!canApply()) return;
         // 方案2: ipinfo.io
         try {
             const resp2 = await fetch('https://ipinfo.io/json', {
@@ -1328,6 +1477,7 @@ class App {
             });
             if (!resp2.ok) throw new Error('ipinfo response not ok');
             const data2 = await resp2.json();
+            if (!canApply()) return;
             if (data2 && data2.loc) {
                 const [lat, lon] = data2.loc.split(',');
                 const fLat = parseFloat(lat).toFixed(4);
@@ -1335,9 +1485,9 @@ class App {
                 const address = data2.city ? {
                     province: data2.region || '',
                     city: data2.city || '',
-                    address: ''
+                    address: '', source: 'ip'
                 } : null;
-                this._applyLocationResult(fLat, fLon, address);
+                this._applyLocationResult(fLat, fLon, address, manager);
                 console.log('IP定位成功(ipinfo.io):', data2.city);
                 return;
             }
@@ -1345,31 +1495,22 @@ class App {
             console.warn('ipinfo.io定位也失败:', err2.message);
         }
 
-        // 方案3: 使用默认城市坐标（北京）作为最后兜底
-        console.warn('所有定位方案均失败，使用默认位置');
-        this._applyLocationResult('39.9042', '116.4074', {
-            province: '北京市',
-            city: '北京市',
-            address: ''
-        });
+        // 无可用定位时保留手动位置，避免把默认城市当作实测位置。
+        this.showToast('无法获取定位，请手动输入位置');
     }
 
     async reverseGeocode(lat, lon) {
         try {
+            const parameters = new URLSearchParams({
+                format: 'jsonv2', lat: String(lat), lon: String(lon), zoom: '18',
+                addressdetails: '1', namedetails: '1', 'accept-language': 'zh-CN'
+            });
             const response = await fetch(
-                `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=zh-CN`,
-                { method: 'GET', headers: { 'Accept': 'application/json' } }
+                `https://nominatim.openstreetmap.org/reverse?${parameters}`,
+                { method: 'GET', headers: { 'Accept': 'application/json' }, signal: AbortSignal.timeout(8000) }
             );
             if (!response.ok) return null;
-            const data = await response.json();
-            if (data && data.address) {
-                const addr = data.address;
-                const province = addr.state || addr.province || '';
-                const city = addr.city || addr.town || addr.county || addr.district || '';
-                const address = addr.suburb || addr.village || addr.road || '';
-                const full = data.display_name || '';
-                return { province, city, address, full: `${province}${city}${address}`.trim() || full };
-            }
+            return LocationFormatter.fromGeocoder(await response.json());
         } catch (err) {
             console.warn('逆地理编码失败:', err);
         }
@@ -1383,6 +1524,7 @@ class App {
         const coords = document.getElementById('custom-coords').value;
         this.watermark.setCustomLocation(province, city, address, coords);
         this.updateWatermarkPreview();
+        this.saveSettings();
     }
 
     getTodayDate() {
@@ -1390,10 +1532,32 @@ class App {
         return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     }
 
+    applySettingsInputs() {
+        const value = id => document.getElementById(id).value;
+        const checked = id => document.getElementById(id).checked;
+        this.watermark.updateConfigs({
+            template: document.querySelector('.template-item.active')?.dataset.template || this.watermark.config.template,
+            position: value('watermark-position'), fontSize: value('watermark-font-size'), opacity: Number(value('watermark-opacity')),
+            useCustomTime: checked('toggle-custom-time'), useCustomLocation: checked('toggle-custom-location'),
+            showCoordinates: checked('toggle-coordinates'), useCustomText: checked('toggle-custom-text'), customText: value('custom-text'),
+            brandEnabled: checked('toggle-brand'), antiFakeEnabled: checked('toggle-antifake'),
+            brandName: value('brand-name'), brandSubtitle: value('brand-subtitle'), brandBadge: value('brand-badge'), brandCodeLabel: value('brand-code-label')
+        });
+        if (checked('toggle-custom-time')) this.watermark.setCustomTime(value('custom-date'), value('custom-time'));
+        if (checked('toggle-custom-location')) this.watermark.setCustomLocation(value('custom-province'), value('custom-city'), value('custom-address'), value('custom-coords'));
+        this.watermark.config.weather.enabled = checked('toggle-custom-weather');
+        if (this.watermark.config.weatherMode === 'manual') this.watermark.setWeather(checked('toggle-custom-weather'), value('custom-weather'), value('custom-temp'));
+        this.updateWatermarkPreview();
+    }
+
     toggleSettingsPanel(show) {
         const panel = document.getElementById('settings-panel');
         this.settingsPanelOpen = show;
+        document.getElementById('btn-save-watermark-settings').textContent = this.photoEditSession ? '保存图片副本' : '保存设置';
         panel.classList.toggle('hidden', !show);
+        panel.classList.toggle('camera-settings', !this.photoEditSession && show);
+        document.querySelector('.app').classList.toggle('camera-settings-open', !this.photoEditSession && show);
+        document.getElementById('photo-editor-modal').classList.toggle('settings-open', !!this.photoEditSession && show);
     }
 
     /* ========== 关于页面 ========== */
@@ -1403,301 +1567,6 @@ class App {
 
     closeAboutModal() {
         document.getElementById('about-modal').classList.add('hidden');
-    }
-
-    /* ========== 登录/注册 ========== */
-    openLoginModal() {
-        if (this.currentUser) {
-            this.showToast(`已登录：${this.currentUser.nickname}`);
-            return;
-        }
-        document.getElementById('login-modal').classList.remove('hidden');
-        this.switchLoginTab('login');
-    }
-
-    closeLoginModal() {
-        document.getElementById('login-modal').classList.add('hidden');
-    }
-
-    switchLoginTab(tab) {
-        document.querySelectorAll('.login-tab').forEach(t => {
-            t.classList.toggle('active', t.dataset.tab === tab);
-        });
-        const isRegister = tab === 'register';
-        document.querySelectorAll('.register-only').forEach(el => {
-            el.classList.toggle('hidden', !isRegister);
-        });
-        document.getElementById('login-title').textContent = isRegister ? '注册' : '登录';
-        document.getElementById('btn-login-submit').textContent = isRegister ? '注册' : '登录';
-        this.loginTab = tab;
-    }
-
-    handleLoginSubmit() {
-        const account = document.getElementById('login-account').value.trim();
-        const password = document.getElementById('login-password').value.trim();
-        const isRegister = this.loginTab === 'register';
-
-        if (!account) {
-            this.showToast('请输入手机号或邮箱');
-            return;
-        }
-        if (!password || password.length < 6) {
-            this.showToast('密码至少6位');
-            return;
-        }
-
-        if (isRegister) {
-            const confirmPassword = document.getElementById('login-confirm-password').value.trim();
-            const nickname = document.getElementById('login-nickname').value.trim();
-            if (password !== confirmPassword) {
-                this.showToast('两次密码不一致');
-                return;
-            }
-            if (!nickname) {
-                this.showToast('请输入昵称');
-                return;
-            }
-            // 注册
-            this.currentUser = {
-                account: account,
-                nickname: nickname,
-                vip: false,
-                registerTime: new Date().toISOString()
-            };
-            this.saveUserToStorage();
-            this.updateLoginUI();
-            this.closeLoginModal();
-            this.showToast(`注册成功，欢迎 ${nickname}！`);
-        } else {
-            // 登录（本地模拟）
-            const saved = this.loadUserFromStorageRaw();
-            if (saved && saved.account === account) {
-                this.currentUser = saved;
-                this.updateLoginUI();
-                this.closeLoginModal();
-                this.showToast(`登录成功，欢迎回来 ${saved.nickname}！`);
-            } else {
-                // 新用户直接登录
-                this.currentUser = {
-                    account: account,
-                    nickname: account.replace(/[@\d]/g, '').substring(0, 8) || '用户' + account.substring(0, 4),
-                    vip: false,
-                    registerTime: new Date().toISOString()
-                };
-                this.saveUserToStorage();
-                this.updateLoginUI();
-                this.closeLoginModal();
-                this.showToast('登录成功！');
-            }
-        }
-    }
-
-    updateLoginUI() {
-        const quickLeft = document.querySelector('.quick-left');
-        const sideMenuName = document.querySelector('.side-menu-name');
-        const sideMenuVip = document.querySelector('.side-menu-vip');
-        const vipBadge = document.querySelector('.vip-badge');
-
-        if (this.currentUser) {
-            if (quickLeft) quickLeft.textContent = `${this.currentUser.nickname} >`;
-            if (sideMenuName) sideMenuName.textContent = this.currentUser.nickname;
-            if (sideMenuVip) {
-                sideMenuVip.textContent = this.currentUser.vip ? 'VIP会员' : '开通VIP享更多功能';
-            }
-            if (vipBadge) {
-                vipBadge.textContent = this.currentUser.vip ? 'VIP' : 'VIP';
-                vipBadge.style.opacity = this.currentUser.vip ? '1' : '0.6';
-            }
-        } else {
-            if (quickLeft) quickLeft.textContent = '立即登录 >';
-            if (sideMenuName) sideMenuName.textContent = '立即登录 >';
-            if (sideMenuVip) sideMenuVip.textContent = '开通VIP享更多功能';
-            if (vipBadge) {
-                vipBadge.textContent = 'VIP';
-                vipBadge.style.opacity = '0.6';
-            }
-        }
-    }
-
-    saveUserToStorage() {
-        try {
-            localStorage.setItem('moxi_user', JSON.stringify(this.currentUser));
-        } catch (err) {
-            console.warn('保存用户信息失败:', err);
-        }
-    }
-
-    loadUserFromStorage() {
-        const saved = this.loadUserFromStorageRaw();
-        if (saved) {
-            this.currentUser = saved;
-        }
-    }
-
-    loadUserFromStorageRaw() {
-        try {
-            const saved = localStorage.getItem('moxi_user');
-            return saved ? JSON.parse(saved) : null;
-        } catch (err) {
-            return null;
-        }
-    }
-
-    /* ========== VIP会员 ========== */
-    openVipModal() {
-        document.getElementById('vip-modal').classList.remove('hidden');
-        // 默认选中推荐套餐
-        document.querySelectorAll('.vip-plan').forEach(p => p.classList.remove('selected'));
-        const popular = document.querySelector('.vip-plan.popular');
-        if (popular) popular.classList.add('selected');
-        this.selectedVipPlan = 'yearly';
-    }
-
-    closeVipModal() {
-        document.getElementById('vip-modal').classList.add('hidden');
-    }
-
-    handleVipSubscribe() {
-        if (!this.currentUser) {
-            this.closeVipModal();
-            this.showToast('请先登录');
-            this.openLoginModal();
-            return;
-        }
-        const planNames = { monthly: '月度会员', yearly: '年度会员', lifetime: '终身会员' };
-        this.currentUser.vip = true;
-        this.currentUser.vipPlan = this.selectedVipPlan;
-        this.saveUserToStorage();
-        this.updateLoginUI();
-        this.closeVipModal();
-        this.showToast(`恭喜开通${planNames[this.selectedVipPlan] || 'VIP'}！`);
-    }
-
-    /* ========== 团队管理 ========== */
-    openTeamModal() {
-        document.getElementById('team-modal').classList.remove('hidden');
-        this.updateTeamUI();
-    }
-
-    closeTeamModal() {
-        document.getElementById('team-modal').classList.add('hidden');
-    }
-
-    showTeamForm(type) {
-        document.getElementById('team-no-team').classList.add('hidden');
-        document.getElementById('team-create-form').classList.toggle('hidden', type !== 'create');
-        document.getElementById('team-join-form').classList.toggle('hidden', type !== 'join');
-    }
-
-    handleCreateTeam() {
-        const name = document.getElementById('team-name-input').value.trim();
-        const desc = document.getElementById('team-desc-input').value.trim();
-        if (!name) {
-            this.showToast('请输入团队名称');
-            return;
-        }
-        // 生成6位邀请码
-        const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-        this.teamData = {
-            name: name,
-            desc: desc || '日常记录',
-            code: code,
-            members: 1,
-            photos: this.photos.length,
-            createTime: new Date().toISOString()
-        };
-        this.saveTeamToStorage();
-        this.updateTeamUI();
-        this.showToast(`团队"${name}"创建成功！`);
-    }
-
-    handleJoinTeam() {
-        const code = document.getElementById('team-code-input').value.trim().toUpperCase();
-        if (!code || code.length < 6) {
-            this.showToast('请输入6位邀请码');
-            return;
-        }
-        // 模拟加入团队
-        this.teamData = {
-            name: '协作团队',
-            desc: '通过邀请码加入',
-            code: code,
-            members: Math.floor(Math.random() * 10) + 2,
-            photos: Math.floor(Math.random() * 50),
-            createTime: new Date().toISOString()
-        };
-        this.saveTeamToStorage();
-        this.updateTeamUI();
-        this.showToast('加入团队成功！');
-    }
-
-    handleLeaveTeam() {
-        if (confirm('确定要退出团队吗？')) {
-            this.teamData = null;
-            this.saveTeamToStorage();
-            this.updateTeamUI();
-            this.showToast('已退出团队');
-        }
-    }
-
-    copyTeamCode() {
-        if (this.teamData) {
-            const code = this.teamData.code;
-            if (navigator.clipboard) {
-                navigator.clipboard.writeText(code).then(() => {
-                    this.showToast('邀请码已复制：' + code);
-                }).catch(() => {
-                    this.showToast('邀请码：' + code);
-                });
-            } else {
-                this.showToast('邀请码：' + code);
-            }
-        }
-    }
-
-    updateTeamUI() {
-        const noTeam = document.getElementById('team-no-team');
-        const createForm = document.getElementById('team-create-form');
-        const joinForm = document.getElementById('team-join-form');
-        const teamInfo = document.getElementById('team-info');
-
-        if (this.teamData) {
-            noTeam.classList.add('hidden');
-            createForm.classList.add('hidden');
-            joinForm.classList.add('hidden');
-            teamInfo.classList.remove('hidden');
-            document.getElementById('team-info-name').textContent = this.teamData.name;
-            document.getElementById('team-info-desc').textContent = this.teamData.desc;
-            document.getElementById('team-code-display').textContent = this.teamData.code;
-            document.getElementById('team-stat-members').textContent = this.teamData.members;
-            document.getElementById('team-stat-photos').textContent = this.teamData.photos;
-        } else {
-            noTeam.classList.remove('hidden');
-            createForm.classList.add('hidden');
-            joinForm.classList.add('hidden');
-            teamInfo.classList.add('hidden');
-            // 清空输入
-            document.getElementById('team-name-input').value = '';
-            document.getElementById('team-desc-input').value = '';
-            document.getElementById('team-code-input').value = '';
-        }
-    }
-
-    saveTeamToStorage() {
-        try {
-            localStorage.setItem('moxi_team', JSON.stringify(this.teamData));
-        } catch (err) {
-            console.warn('保存团队信息失败:', err);
-        }
-    }
-
-    loadTeamFromStorage() {
-        try {
-            const saved = localStorage.getItem('moxi_team');
-            if (saved) this.teamData = JSON.parse(saved);
-        } catch (err) {
-            this.teamData = null;
-        }
     }
 
     /* ========== 边拍边拼 ========== */
@@ -1847,6 +1716,8 @@ class App {
 
             const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
             self.currentPhoto = dataUrl;
+            self.currentOriginalPhoto = null;
+            self.currentWatermarkConfig = null;
             self.currentPhotoMeta = {
                 antiFakeCode: self.watermark.getAntiFakeCode(),
                 captureTime: new Date().toISOString(),
@@ -2077,6 +1948,8 @@ class App {
         }
         const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
         this.currentPhoto = dataUrl;
+        this.currentOriginalPhoto = null;
+        this.currentWatermarkConfig = null;
         this.currentPhotoMeta = {
             antiFakeCode: this.watermark.getAntiFakeCode(),
             captureTime: new Date().toISOString(),
@@ -2093,27 +1966,313 @@ class App {
     }
 
     /* ========== 照片编辑模式 ========== */
-    openPhotoEditMode() {
-        if (this.photos.length === 0) {
-            this.showToast('相册暂无照片，请先拍照');
-            this.switchToPhotoMode();
-            return;
-        }
-        // 打开相册让用户选择照片
-        this.openGallery();
-        this.showToast('选择照片后可重新编辑水印');
+    snapshotWatermarkConfig(manager = this.watermark) {
+        const config = JSON.parse(JSON.stringify(manager.getConfig()));
+        config.customTime = { ...manager.getCurrentTime() };
+        config.useCustomTime = true;
+        config.weatherMode = 'manual';
+        return config;
     }
 
-    /* ========== 视频模式 ========== */
-    openVideoMode() {
-        this.showToast('视频模式：长按拍照按钮录制视频');
-        // 设置视频录制标志
-        this.videoMode = true;
+    closeEditSource() {
+        document.getElementById('edit-source-modal').classList.add('hidden');
+        this.pendingLegacyPhoto = null;
+        this.switchToPhotoMode();
+    }
+
+    editSelectedPhoto(photo) {
+        if (!photo?.dataUrl) return;
+        if (!photo.originalDataUrl) {
+            this.pendingLegacyPhoto = photo;
+            document.getElementById('edit-source-description').textContent = '这张照片未保留无水印原图，已有水印无法直接替换。请选择对应原图，或在这张照片上添加新水印。';
+            document.getElementById('btn-select-local-photo').classList.add('hidden');
+            document.getElementById('btn-overlay-legacy-photo').classList.remove('hidden');
+            document.getElementById('edit-source-modal').classList.remove('hidden');
+            return;
+        }
+        this.startPhotoEditor(photo);
+    }
+
+    async importEditPhoto(input) {
+        const file = input.files?.[0];
+        input.value = '';
+        if (!file) return;
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+            this.showToast('请选择 JPG、PNG 或 WebP 照片');
+            return;
+        }
+        try {
+            const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(reader.error);
+                reader.readAsDataURL(file);
+            });
+            await this.startPhotoEditor({ originalDataUrl: dataUrl });
+        } catch (err) {
+            console.error('导入照片失败:', err);
+            this.showToast('无法读取照片，请重新选择');
+        }
+    }
+
+    async startPhotoEditor(photo, field = null) {
+        if (this.photoEditSession || this.loadingPhotoEditor) return;
+        this.loadingPhotoEditor = true;
+        try {
+            const image = await new Promise((resolve, reject) => {
+                const image = new Image();
+                image.onload = () => resolve(image);
+                image.onerror = () => reject(new Error('照片无法解码'));
+                image.src = photo.originalDataUrl;
+            });
+            this.closeEditSource();
+            const manager = new WatermarkManager();
+            manager.updateConfigs(photo.watermarkConfig || this.snapshotWatermarkConfig(this.cameraWatermark));
+            this.photoEditSession = {
+                image, manager, originalDataUrl: photo.originalDataUrl,
+                captureTime: photo.captureTime || photo.timestamp || new Date().toISOString(),
+                canvas: document.createElement('canvas')
+            };
+            this.loadSettings(manager.getConfig());
+            document.getElementById('settings-panel').classList.add('photo-edit-settings');
+            document.querySelector('#settings-panel h2').textContent = '修改水印';
+            document.getElementById('btn-close-settings').textContent = '完成';
+            document.getElementById('photo-editor-modal').classList.remove('hidden');
+            this.renderPhotoEdit();
+            this.toggleSettingsPanel(false);
+            if (field) this.openWatermarkTextEditor(field);
+        } catch (err) {
+            console.error('打开编辑失败:', err);
+            this.showToast('无法打开照片，请重新选择');
+            if (this.photoEditSession) this.closePhotoEditor();
+        } finally {
+            this.loadingPhotoEditor = false;
+        }
+    }
+
+    renderPhotoEdit() {
+        const session = this.photoEditSession;
+        if (!session) return;
+        const { canvas, image, manager } = session;
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const ctx = canvas.getContext('2d', { desynchronized: false, willReadFrequently: true });
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(image, 0, 0);
+        session.textRegions = manager.drawWatermarkOnCanvas(ctx, canvas.width, canvas.height);
+        session.dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+        document.getElementById('photo-editor-image').src = session.dataUrl;
+        document.getElementById('current-antifake-preview').textContent = manager.getAntiFakeCode();
+        this.updatePhotoTextTargets('photo-editor');
+    }
+
+    updatePhotoTextTargets(mode) {
+        const image = document.getElementById(`${mode}-image`);
+        const targets = document.getElementById(`${mode}-text-targets`);
+        targets.replaceChildren();
+        if (!image.getAttribute('src') || image.parentElement.clientHeight === 0) return;
+        let width, height, regions;
+        if (mode === 'photo-editor') {
+            const session = this.photoEditSession;
+            if (!session) return;
+            ({ width, height } = session.canvas);
+            regions = session.textRegions;
+        } else {
+            if (!this.currentOriginalPhoto || !this.currentWatermarkConfig || !image.naturalWidth) return;
+            width = image.naturalWidth; height = image.naturalHeight;
+            const manager = new WatermarkManager();
+            manager.updateConfigs(this.currentWatermarkConfig);
+            manager.currentAntiFakeCode = this.currentPhotoMeta?.antiFakeCode || '';
+            regions = manager.drawWatermarkOnCanvas(document.createElement('canvas').getContext('2d'), width, height);
+        }
+        if (!width || !height) return;
+        const rect = image.getBoundingClientRect();
+        const parent = image.parentElement.getBoundingClientRect();
+        const ratio = Math.min(rect.width / width, rect.height / height);
+        const left = rect.left - parent.left + (rect.width - width * ratio) / 2;
+        const top = rect.top - parent.top + (rect.height - height * ratio) / 2;
+        const labels = { time: '日期和时间', date: '日期和时间', weather: '天气和温度', location: '地址', coordinates: '经纬度',
+            text: '备注文字', brandName: '品牌名称', brandSubtitle: '品牌副标题', brandBadge: '徽章文字', brandCodeLabel: '编号前缀' };
+        for (const region of regions || []) {
+            if (region.width <= 0 || !labels[region.field]) continue;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'watermark-text-target';
+            button.dataset.field = region.field;
+            button.setAttribute('aria-label', `修改${labels[region.field]}`);
+            button.style.cssText = `left:${left + region.x * ratio}px;top:${top + region.y * ratio}px;width:${region.width * ratio}px;height:${region.height * ratio}px;`;
+            targets.append(button);
+        }
+    }
+
+    openWatermarkTextEditor(field) {
+        if (!this.photoEditSession || this.savingEditedPhoto) return;
+        if (this.editingWatermarkField) this.closeWatermarkTextEditor();
+        const manager = this.photoEditSession.manager;
+        const config = manager.getConfig(), time = manager.getCurrentTime(), location = manager.getLocation();
+        const locationFields = LocationFormatter.editableFields(location);
+        const definitions = {
+            time: ['日期和时间', [['date', '日期', time.date, 'date'], ['time', '时间', time.time, 'time']]],
+            date: ['日期和时间', [['date', '日期', time.date, 'date'], ['time', '时间', time.time, 'time']]],
+            weather: ['天气和温度', [['weather', '天气', config.weather.text], ['temp', '温度', config.weather.temp]]],
+            location: ['地址', [
+                ['province', '省份/直辖市', locationFields.province],
+                ['city', '城市/区县', locationFields.city],
+                ['address', '街道、门牌和地点名称', locationFields.address, 'textarea']
+            ]],
+            coordinates: ['经纬度', [['coords', '纬度,经度', location.coords]]],
+            text: ['备注文字', [['text', '备注文字', config.useCustomText ? config.customText : '工作记录', 'text', 20]]],
+            brandName: ['品牌名称', [['value', '品牌名称', config.brandName, 'text', 8]]],
+            brandSubtitle: ['品牌副标题', [['value', '品牌副标题', config.brandSubtitle, 'text', 6]]],
+            brandBadge: ['徽章文字', [['value', '徽章文字', config.brandBadge, 'text', 6]]],
+            brandCodeLabel: ['编号前缀', [['value', '编号前缀', config.brandCodeLabel, 'text', 4]]]
+        };
+        const definition = definitions[field];
+        if (!definition) return;
+        this.watermarkTextDraft = { config: JSON.parse(JSON.stringify(config)), weatherDetail: manager.weatherDetail };
+        this.toggleSettingsPanel(false);
+        this.editingWatermarkField = field;
+        document.getElementById('watermark-text-title').textContent = `修改${definition[0]}`;
+        const fields = document.getElementById('watermark-text-fields');
+        fields.replaceChildren();
+        for (const [name, label, value, type = 'text', maxLength] of definition[1]) {
+            const group = document.createElement('div'); group.className = 'input-group';
+            const caption = document.createElement('label'); caption.textContent = label;
+            const input = document.createElement(type === 'textarea' ? 'textarea' : 'input');
+            if (type !== 'textarea') input.type = type;
+            input.name = name; input.id = `watermark-edit-${name}`; input.value = value || '';
+            caption.htmlFor = input.id;
+            if (maxLength) input.maxLength = maxLength;
+            if (['date', 'time', 'coords'].includes(name)) input.required = true;
+            group.append(caption, input); fields.append(group);
+        }
+        document.getElementById('watermark-text-help').textContent = field === 'brandCodeLabel'
+            ? '修改编号前缀；保存副本时自动生成新的照片编号。'
+            : field === 'coordinates' ? '例如：32.189802,118.714729，先填纬度，再填经度。'
+            : field === 'location' ? '地址分项填写，详细地址可补充楼栋、楼层和房间号；经纬度保持原值。'
+            : ['time', 'date', 'weather'].includes(field) ? '星期随日期自动更新。' : '';
+        document.getElementById('watermark-text-modal').classList.remove('hidden');
+        fields.querySelector('input,textarea')?.focus();
+    }
+
+    closeWatermarkTextEditor(commit = false) {
+        if (!commit && this.watermarkTextDraft && this.photoEditSession) {
+            this.photoEditSession.manager.updateConfigs(this.watermarkTextDraft.config);
+            this.photoEditSession.manager.weatherDetail = this.watermarkTextDraft.weatherDetail;
+            this.loadSettings(this.watermarkTextDraft.config);
+            this.renderPhotoEdit();
+        }
+        this.watermarkTextDraft = null;
+        document.getElementById('watermark-text-modal').classList.add('hidden');
+        this.editingWatermarkField = null;
+    }
+
+    applyWatermarkTextEdit(commit = true) {
+        const session = this.photoEditSession, field = this.editingWatermarkField;
+        if (!session || !field) return;
+        const values = Object.fromEntries(new FormData(document.getElementById('watermark-text-form')));
+        const manager = session.manager;
+        if (field === 'time' || field === 'date') {
+            if (!values.date || !values.time) return;
+            manager.setCustomTime(values.date, values.time);
+            manager.updateConfig('useCustomTime', true);
+        } else if (field === 'weather') {
+            manager.setWeather(true, values.weather.trim(), values.temp.trim());
+            manager.setWeatherMode('manual');
+        } else if (field === 'location') {
+            manager.setCustomLocation(values.province.trim(), values.city.trim(), values.address.trim(), manager.getLocation().coords);
+            manager.updateConfig('useCustomLocation', true);
+        } else if (field === 'coordinates') {
+            if (!manager.formatCoordinates(values.coords)) {
+                if (!commit) return;
+                document.getElementById('watermark-edit-coords').setCustomValidity('请输入有效的纬度和经度');
+                document.getElementById('watermark-edit-coords').reportValidity();
+                document.getElementById('watermark-edit-coords').oninput = event => event.target.setCustomValidity('');
+                return;
+            }
+            manager.updateConfigs({ useCustomLocation: true, customLocation: { ...manager.getLocation(), coords: values.coords.trim() } });
+        } else if (field === 'text') manager.updateConfigs({ useCustomText: true, customText: values.text });
+        else manager.updateConfig(field, values.value);
+        this.loadSettings(manager.getConfig());
+        this.renderPhotoEdit();
+        if (commit) this.closeWatermarkTextEditor(true);
+    }
+
+    closePhotoEditor() {
+        if (this.savingEditedPhoto) return;
+        this.closeWatermarkTextEditor();
+        this.photoEditSession = null;
+        document.getElementById('photo-editor-modal').classList.add('hidden');
+        document.getElementById('photo-editor-image').removeAttribute('src');
+        document.getElementById('settings-panel').classList.remove('photo-edit-settings');
+        document.querySelector('#settings-panel h2').textContent = '水印设置';
+        document.getElementById('btn-close-settings').textContent = '×';
+        this.toggleSettingsPanel(false);
+        this.loadSettings(this.cameraWatermark.getConfig());
+        this.updateWatermarkPreview();
+        this.switchToPhotoMode();
+    }
+
+    async saveEditedPhoto() {
+        const session = this.photoEditSession;
+        if (!session || this.savingEditedPhoto) return;
+        this.savingEditedPhoto = true;
+        const button = document.getElementById('btn-save-photo-edit');
+        button.disabled = true;
+        document.getElementById('btn-cancel-photo-edit').disabled = true;
+        document.getElementById('settings-panel').inert = true;
+        document.getElementById('btn-photo-edit-settings').disabled = true;
+        try {
+            this.renderPhotoEdit();
+            const location = session.manager.getLocation();
+            const photo = {
+                id: Date.now(), dataUrl: session.dataUrl,
+                originalDataUrl: session.originalDataUrl,
+                watermarkConfig: this.snapshotWatermarkConfig(session.manager),
+                timestamp: new Date().toISOString(), captureTime: session.captureTime,
+                antiFakeCode: session.manager.getAntiFakeCode(),
+                location: location.full || `${location.province}${location.city}${location.address}`,
+                watermarkTime: session.manager.getCurrentTime().fullDate || '',
+                weather: session.manager.getWeather(), weatherDetail: session.manager.getWeatherDetail()
+            };
+            await this.downloadPhoto(photo.dataUrl);
+            const nextPhotos = [photo, ...this.photos].slice(0, 20);
+            try {
+                await this.photoStore.replace(nextPhotos);
+                this.photos = nextPhotos;
+                this.updateGalleryThumbnail();
+                this.showToast('编辑后的照片已保存，原照片保留');
+            } catch (err) {
+                console.error('照片记录保存失败:', err);
+                this.showToast('照片已导出，但照片记录保存失败，请检查存储空间');
+            }
+            this.savingEditedPhoto = false;
+            this.closePhotoEditor();
+            this.closePreview();
+        } catch (err) {
+            console.error('编辑照片保存失败:', err);
+            this.showToast('保存失败，编辑内容保留，请重试');
+        } finally {
+            this.savingEditedPhoto = false;
+            button.disabled = false;
+            document.getElementById('btn-cancel-photo-edit').disabled = false;
+            document.getElementById('settings-panel').inert = false;
+            document.getElementById('btn-photo-edit-settings').disabled = false;
+        }
+    }
+
+    openPhotoEditMode() {
+        this.pendingLegacyPhoto = null;
+        document.getElementById('edit-source-description').textContent = '选择本机照片或无水印原图，修改后保存副本。系统相册照片中已有的水印不会自动去除。';
+        document.getElementById('btn-select-local-photo').classList.remove('hidden');
+        document.getElementById('btn-select-local-photo').disabled = this.photos.length === 0;
+        document.getElementById('btn-overlay-legacy-photo').classList.add('hidden');
+        document.getElementById('edit-source-modal').classList.remove('hidden');
     }
 
     switchToPhotoMode() {
         this.currentMode = 'photo';
-        this.videoMode = false;
         document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
         document.querySelector('.mode-tab[data-mode="photo"]').classList.add('active');
     }
@@ -2129,38 +2288,39 @@ class App {
         }, 2000);
     }
 
-    savePhotosToStorage() {
-        try {
-            const photosToSave = this.photos.slice(0, 20);
-            localStorage.setItem('moxi_photos', JSON.stringify(photosToSave));
-        } catch (err) {
-            console.warn('保存照片失败:', err);
-        }
-    }
-
-    loadPhotosFromStorage() {
-        try {
-            const saved = localStorage.getItem('moxi_photos');
-            if (saved) this.photos = JSON.parse(saved);
-        } catch (err) {
-            this.photos = [];
+    async loadPhotosFromStorage() {
+        await this.photoStore.open();
+        this.photos = await this.photoStore.read();
+        const legacy = localStorage.getItem('moxi_photos');
+        if (legacy) {
+            const oldPhotos = JSON.parse(legacy);
+            const merged = new Map([...oldPhotos, ...this.photos].map(photo => [photo.id, photo]));
+            const photos = [...merged.values()].sort((a, b) => b.id - a.id).slice(0, 20);
+            await this.photoStore.replace(photos);
+            this.photos = photos;
+            localStorage.removeItem('moxi_photos');
         }
     }
 
     saveSettings() {
         try {
-            localStorage.setItem('moxi_settings', JSON.stringify(this.watermark.getConfig()));
+            localStorage.setItem('moxi_settings', JSON.stringify(this.cameraWatermark.getConfig()));
+            return true;
         } catch (err) {
             console.warn('保存设置失败:', err);
+            return false;
         }
     }
 
-    loadSettings() {
+    loadSettings(config = null) {
         try {
-            const saved = localStorage.getItem('moxi_settings');
+            const saved = config ? JSON.stringify(config) : localStorage.getItem('moxi_settings');
             if (saved) {
                 const settings = JSON.parse(saved);
+                const migrateBadge = !settings.brandBadge || settings.brandBadge === '本机记录';
+                if (migrateBadge) settings.brandBadge = '真实可验';
                 this.watermark.updateConfigs(settings);
+                if (!config && migrateBadge) this.saveSettings();
                 if (settings.template) {
                     document.querySelectorAll('.template-item').forEach(i => i.classList.remove('active'));
                     const item = document.querySelector(`.template-item[data-template="${settings.template}"]`);
@@ -2169,6 +2329,29 @@ class App {
                 if (settings.position) document.getElementById('watermark-position').value = settings.position;
                 if (settings.fontSize) document.getElementById('watermark-font-size').value = settings.fontSize;
                 if (settings.opacity) document.getElementById('watermark-opacity').value = settings.opacity;
+                document.getElementById('toggle-custom-time').checked = !!settings.useCustomTime;
+                document.getElementById('time-settings').classList.toggle('hidden', !settings.useCustomTime);
+                if (settings.customTime) {
+                    document.getElementById('custom-date').value = settings.customTime.date;
+                    document.getElementById('custom-time').value = settings.customTime.time;
+                }
+                document.getElementById('toggle-custom-location').checked = !!settings.useCustomLocation;
+                document.getElementById('toggle-coordinates').checked = settings.showCoordinates !== false;
+                document.getElementById('location-settings').classList.toggle('hidden', !settings.useCustomLocation);
+                if (settings.customLocation) {
+                    const locationFields = LocationFormatter.editableFields(settings.customLocation);
+                    for (const [field, key] of [['province', 'province'], ['city', 'city'], ['address', 'address'], ['coords', 'coords']]) {
+                        document.getElementById(`custom-${field}`).value = locationFields[key] || '';
+                    }
+                }
+                if (!settings.customLocation) {
+                    for (const field of ['province', 'city', 'address', 'coords']) {
+                        document.getElementById(`custom-${field}`).value = '';
+                    }
+                }
+                document.getElementById('toggle-custom-text').checked = !!settings.useCustomText;
+                document.getElementById('text-settings').classList.toggle('hidden', !settings.useCustomText);
+                document.getElementById('custom-text').value = settings.customText || '';
                 if (settings.weather) {
                     document.getElementById('toggle-custom-weather').checked = settings.weather.enabled;
                     document.getElementById('custom-weather').value = settings.weather.text || '';
@@ -2193,6 +2376,11 @@ class App {
                 const antifakeToggle = document.getElementById('toggle-antifake');
                 if (brandToggle) brandToggle.checked = settings.brandEnabled !== false;
                 if (antifakeToggle) antifakeToggle.checked = settings.antiFakeEnabled !== false;
+                document.getElementById('brand-name').value = settings.brandName || '今日水印';
+                document.getElementById('brand-subtitle').value = settings.brandSubtitle || '相机';
+                document.getElementById('brand-badge').value = settings.brandBadge || '真实可验';
+                document.getElementById('brand-code-label').value = settings.brandCodeLabel || '编号';
+                document.getElementById('weather-settings').classList.toggle('hidden', settings.weather?.enabled === false);
             }
         } catch (err) {
             console.warn('加载设置失败:', err);
@@ -2203,9 +2391,55 @@ class App {
 const app = new App();
 
 window.addEventListener('DOMContentLoaded', async () => {
+    try {
+        await app.loadPhotosFromStorage();
+    } catch (err) {
+        console.error(err);
+        app.showToast('本地相册读取失败，请检查设备存储');
+    }
     app.loadSettings();
     await app.init();
     app.updateGalleryThumbnail();
+    if (DevicePlatform.native) {
+        await DevicePlatform.plugin('App').addListener('backButton', () => {
+            if (app.savingEditedPhoto) return;
+            if (app.editingWatermarkField) {
+                app.closeWatermarkTextEditor();
+                return;
+            }
+            if (!document.getElementById('edit-source-modal').classList.contains('hidden')) {
+                app.closeEditSource();
+                return;
+            }
+            if (app.settingsPanelOpen) {
+                app.toggleSettingsPanel(false);
+                return;
+            }
+            if (app.photoEditSession) {
+                app.closePhotoEditor();
+                return;
+            }
+            if (!document.getElementById('preview-modal').classList.contains('hidden')) {
+                app.closePreview();
+                return;
+            }
+            if (!document.getElementById('gallery-modal').classList.contains('hidden')) {
+                app.closeGallery();
+                return;
+            }
+            const modal = document.querySelector('.preview-modal:not(.hidden), .gallery-modal:not(.hidden), .verify-modal:not(.hidden), .about-modal:not(.hidden), .profile-modal:not(.hidden), .collage-modal:not(.hidden), .report-modal:not(.hidden)');
+            if (modal) {
+                modal.classList.add('hidden');
+                app.verifyModalOpen = false;
+            } else if (app.settingsPanelOpen) {
+                app.toggleSettingsPanel(false);
+            } else if (!document.getElementById('side-menu').classList.contains('hidden')) {
+                app.closeSideMenu();
+            } else {
+                DevicePlatform.plugin('App').exitApp();
+            }
+        });
+    }
 });
 
 window.addEventListener('beforeunload', () => {
@@ -2222,7 +2456,7 @@ document.addEventListener('visibilitychange', () => {
     } else {
         if (app.camera.isReady()) app.startTimeUpdateTimer();
         // 页面恢复可见时，如果天气缓存过期则刷新
-        if (app.watermark.config.weatherMode !== 'manual' &&
+        if (!app.photoEditSession && app.watermark.config.weatherMode !== 'manual' &&
             app.weather.currentWeather &&
             (Date.now() - app.weather.lastFetchTime) > app.weather.cacheDuration) {
             app.refreshAutoWeather();

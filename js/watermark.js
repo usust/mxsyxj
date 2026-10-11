@@ -13,12 +13,17 @@ class WatermarkManager {
             customTime: null,
             customLocation: null,
             customText: '',
-            weather: { enabled: true, text: '晴', temp: '27°C' },
+            weather: { enabled: true, text: '', temp: '' },
             weatherMode: 'auto',
             useCustomTime: false,
             useCustomLocation: false,
+            showCoordinates: true,
             useCustomText: false,
             brandEnabled: true,
+            brandName: '今日水印',
+            brandSubtitle: '相机',
+            brandBadge: '真实可验',
+            brandCodeLabel: '编号',
             antiFakeEnabled: true
         };
 
@@ -61,20 +66,20 @@ class WatermarkManager {
 
     /**
      * 生成品牌防伪水印HTML（右下角）
-     * 匹配参考图：今日水印 → 相机 [真实可验](蓝色徽章) → 防伪 XXXXXXXXXXXXX
+     * 今日水印 → 相机 [真实可验] → 编号 XXXXXXXXXXXXX
      */
     generateBrandHTML() {
         if (!this.config.brandEnabled) return '';
 
         let html = '';
         // 品牌名称
-        html += `<div class="brand-name">今日水印</div>`;
-        // 副标题：相机 + 蓝色徽章"真实可验"
-        html += `<div class="brand-subtitle">相机 <span class="brand-verify-badge">真实可验</span></div>`;
+        html += `<div class="brand-name">${this.escapeHTML(this.config.brandName || '今日水印')}</div>`;
+        // 本地编号不提供真实性验证。
+        html += `<div class="brand-subtitle">${this.escapeHTML(this.config.brandSubtitle || '相机')} <span class="brand-verify-badge">${this.escapeHTML(this.config.brandBadge || '真实可验')}</span></div>`;
         
         // 防伪码
         if (this.config.antiFakeEnabled) {
-            html += `<div class="brand-antifake"><span class="antifake-label">防伪</span> ${this.currentAntiFakeCode}</div>`;
+            html += `<div class="brand-antifake"><span class="antifake-label">${this.escapeHTML(this.config.brandCodeLabel || '编号')}</span> ${this.currentAntiFakeCode}</div>`;
         }
         
         return html;
@@ -89,6 +94,27 @@ class WatermarkManager {
             brandElement.classList.remove('hidden');
             brandElement.style.opacity = this.config.opacity / 100;
             brandElement.innerHTML = this.generateBrandHTML();
+            const top = ['bottom-right', 'bottom-center'].includes(this.config.position);
+            const padding = this.config.template === 'default' ? 10 : 20;
+            const parent = brandElement.parentElement;
+            const ratio = parent?.clientWidth && parent?.clientHeight
+                ? Math.min(parent.clientWidth, parent.clientHeight) / 414 : 1;
+            const scale = this.getFontScale() * ratio;
+            brandElement.style.right = `${padding * ratio}px`;
+            brandElement.style.top = top ? `${padding * ratio}px` : 'auto';
+            brandElement.style.bottom = top ? 'auto' : `${padding * ratio}px`;
+            for (const [selector, size] of [['.brand-name', 20], ['.brand-subtitle', 13], ['.brand-verify-badge', 13], ['.brand-antifake', 8]]) {
+                brandElement.querySelector(selector)?.style.setProperty('font-size', `${size * scale}px`);
+            }
+            const ctx = document.createElement('canvas').getContext('2d');
+            for (const [selector, text, size, limit] of [
+                ['.brand-name', this.config.brandName || '今日水印', 20, 130],
+                ['.brand-subtitle', this.config.brandSubtitle || '相机', 13, 75]
+            ]) {
+                ctx.font = `700 ${size}px Arial, sans-serif`;
+                brandElement.querySelector(selector).style.fontSize = `${size * scale * Math.min(1, limit / ctx.measureText(text).width)}px`;
+            }
+            brandElement.style.setProperty('--brand-scale', scale);
         } else {
             brandElement.classList.add('hidden');
         }
@@ -141,7 +167,7 @@ class WatermarkManager {
     getWeather() {
         if (this.config.weather.enabled) {
             const w = this.config.weather;
-            return `${w.text} ${w.temp}`;
+            return `${w.text} ${w.temp}`.trim();
         }
         return '';
     }
@@ -190,97 +216,243 @@ class WatermarkManager {
      * 大号时间 | 日期 \n 星期 天气 温度 \n 地点
      */
     generateDefaultTemplate(timeData, location, weather) {
-        let html = '';
-        // 第一行：时间 | 日期
-        html += `<div class="wm-main">`;
-        html += `<span class="wm-time">${timeData.time}</span>`;
-        html += `<span class="wm-divider"></span>`;
-        html += `<span class="wm-date">${timeData.date}</span>`;
-        html += `</div>`;
-        
-        // 第二行：星期 天气 温度
-        if (weather) {
-            html += `<div class="wm-weather">${timeData.weekDay} ${weather}</div>`;
-        } else {
-            html += `<div class="wm-weather">${timeData.weekDay}</div>`;
-        }
-        
-        // 第三行：地点
-        const locText = location.full || `${location.province}${location.city}${location.address}`;
-        if (locText) {
-            html += `<div class="wm-location">${this.locationIcon}${locText}</div>`;
-        }
-        
-        // 自定义文字
-        if (this.config.useCustomText && this.config.customText) {
-            html += `<div class="wm-text">${this.config.customText}</div>`;
-        }
-        
-        return html;
+        return this.classicPreviewHTML(this.getClassicLayout(414, timeData, location, weather));
     }
 
-    /**
-     * 简约模板
-     */
-    generateSimpleTemplate(timeData, location, weather) {
-        let html = '';
-        html += `<div class="wm-time">${timeData.time}</div>`;
-        html += `<div class="wm-date">${timeData.date}</div>`;
-        
-        if (this.config.useCustomText && this.config.customText) {
-            html += `<div class="wm-text">${this.config.customText}</div>`;
-        }
-        
-        return html;
+    formatCoordinates(coords) {
+        const match = String(coords || '').trim().match(/^([+-]?\d+(?:\.\d+)?)\s*°?\s*([NS])?\s*[,，]\s*([+-]?\d+(?:\.\d+)?)\s*°?\s*([EW])?$/i);
+        if (!match) return '';
+        let lat = Number(match[1]), lon = Number(match[3]);
+        if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return '';
+        if (match[2]) lat = Math.abs(lat) * (match[2].toUpperCase() === 'S' ? -1 : 1);
+        if (match[4]) lon = Math.abs(lon) * (match[4].toUpperCase() === 'W' ? -1 : 1);
+        return `${Math.abs(lat).toFixed(6)}°${lat < 0 ? 'S' : 'N'},${Math.abs(lon).toFixed(6)}°${lon < 0 ? 'W' : 'E'}`;
     }
 
-    /**
-     * 现代模板
-     */
-    generateModernTemplate(timeData, location, weather) {
-        let html = '';
-        html += `<div class="wm-badge">今日</div>`;
-        html += `<div class="wm-time">${timeData.time}</div>`;
-        html += `<div class="wm-date">${timeData.date}</div>`;
-        
-        if (weather) {
-            html += `<div class="wm-weather">${timeData.weekDay} ${weather}</div>`;
-        }
-        
-        const locText = location.full || `${location.province}${location.city}`;
-        if (locText) {
-            html += `<div class="wm-location">${locText}</div>`;
-        }
-        
-        if (this.config.useCustomText && this.config.customText) {
-            html += `<div class="wm-text">${this.config.customText}</div>`;
-        }
-        
-        return html;
+    classicLocation(location) {
+        const full = location.full || LocationFormatter.join([location.province, location.city, location.address]);
+        const area = LocationFormatter.join([location.province, location.city]);
+        if (area && full.startsWith(area) && full.length > area.length) return `${area} · ${full.slice(area.length)}`;
+        return full;
     }
 
-    /**
-     * 专业模板
-     */
-    generateProfessionalTemplate(timeData, location, weather) {
-        let html = '';
-        html += `<div class="wm-time">${timeData.fullDate}</div>`;
-        
-        if (weather) {
-            html += `<div class="wm-weather">${timeData.weekDay} ${weather}</div>`;
+    /** Shared measured layout keeps the live preview and saved photo in the same proportions. */
+    getClassicLayout(w, time = this.getCurrentTime(), location = this.getLocation(), weather = this.getWeather(), h = Infinity, scale = this.getFontScale()) {
+        const ctx = document.createElement('canvas').getContext('2d');
+        const maxWidth = Math.max(40, w - 20);
+        const font = (size, weight = 400) => `${weight} ${size}px Arial, sans-serif`;
+        const measure = (text, size, weight = 400) => {
+            ctx.font = font(size, weight);
+            return ctx.measureText(text).width;
+        };
+        const weatherText = `${time.weekDay}${weather ? '  ' + weather : ''}`;
+        const stretch = 0.88;
+        const headerNaturalWidth = measure(time.time, 52) * stretch + 18 + Math.max(measure(time.date, 20), measure(weatherText, 20));
+        const headerScale = Math.min(scale, maxWidth / headerNaturalWidth);
+        const timeWidth = measure(time.time, 52 * headerScale) * stretch;
+        const detailX = timeWidth + 18 * headerScale;
+        const headerWidth = headerNaturalWidth * headerScale;
+        const headerHeight = 52 * headerScale;
+        const rows = [
+            { kind: 'time', text: time.time, x: 0, y: 0, width: timeWidth, height: headerHeight, size: 52 * headerScale, stretch },
+            { kind: 'divider', x: timeWidth + 9 * headerScale, y: 0, width: 3 * headerScale, height: headerHeight },
+            { kind: 'date', text: time.date, x: detailX, y: 0, width: headerWidth - detailX, height: 26 * headerScale, size: 20 * headerScale },
+            { kind: 'weather', text: weatherText, x: detailX, y: 28 * headerScale, width: headerWidth - detailX, height: 24 * headerScale, size: 20 * headerScale }
+        ];
+        let height = headerHeight;
+        let width = headerWidth;
+        const addParagraph = (kind, text, size, available, gap) => {
+            if (!text) return 0;
+            ctx.font = font(size);
+            const lines = this.wrapCanvasText(ctx, text, available);
+            const rowWidth = Math.max(...lines.map(line => ctx.measureText(line).width));
+            const rowHeight = lines.length * size * 1.3;
+            height += gap;
+            rows.push({ kind, text, lines, x: 0, y: height, width: rowWidth, height: rowHeight, size });
+            height += rowHeight;
+            width = Math.max(width, rowWidth);
+            return rowHeight + gap;
+        };
+        addParagraph('location', this.classicLocation(location), 18 * scale, maxWidth, 12 * scale);
+        const reserveBrand = this.config.brandEnabled && this.config.position === 'bottom-left';
+        const footerWidth = Math.max(40, maxWidth - (reserveBrand ? this.getBrandReserve() : 0));
+        const footerStart = height;
+        const coordinates = this.config.showCoordinates !== false ? this.formatCoordinates(location.coords) : '';
+        if (coordinates) {
+            const padding = 8 * scale;
+            let text = `经纬度： ${coordinates}`;
+            if (measure(text, 18 * scale) > footerWidth - padding * 2) text = text.replace(',', ',\n');
+            addParagraph('coordinates', text, 18 * scale, footerWidth - padding * 2, 12 * scale);
+            const row = rows[rows.length - 1];
+            row.width += padding * 2;
+            row.height += padding * 2;
+            row.padding = padding;
+            height += padding * 2;
+            width = Math.max(width, row.width);
         }
-        
-        const locText = location.full || `${location.province}${location.city}${location.address}`;
-        if (locText) {
-            html += `<div class="wm-location">${this.locationIcon}${locText}</div>`;
+        if (this.config.useCustomText) addParagraph('text', this.config.customText, 12 * scale, footerWidth, 6 * scale);
+        if (reserveBrand) height = Math.max(height, footerStart + 54 * this.getFontScale());
+        const right = this.config.position.endsWith('right');
+        const center = this.config.position.endsWith('center');
+        for (const row of rows) {
+            if (['time', 'divider', 'date', 'weather'].includes(row.kind)) {
+                row.x += right ? width - headerWidth : center ? (width - headerWidth) / 2 : 0;
+            } else {
+                row.x = right ? width - row.width : center ? (width - row.width) / 2 : 0;
+            }
         }
-        
-        const noteText = this.config.useCustomText && this.config.customText 
-            ? this.config.customText 
-            : '工作记录';
-        html += `<div class="wm-text">${noteText}</div>`;
-        
-        return html;
+        const brandHeight = this.config.brandEnabled && this.config.position !== 'bottom-left' ? 54 * this.getFontScale() + 10 : 0;
+        if (height > h - 20 - brandHeight && scale > 0.05) {
+            return this.getClassicLayout(w, time, location, weather, h, scale * 0.8);
+        }
+        return { rows, width, height };
+    }
+
+    classicPreviewHTML(layout, ratio = 1) {
+        return layout.rows.map(row => {
+            const style = `left:${row.x * ratio}px;top:${row.y * ratio}px;width:${row.width * ratio / (row.stretch || 1)}px;height:${row.height * ratio}px;`;
+            if (row.kind === 'divider') return `<span class="wm-divider" style="${style}"></span>`;
+            const lines = row.lines || [row.text];
+            const padding = (row.padding || 0) * ratio;
+            const transform = row.stretch ? `transform:scaleX(${row.stretch});transform-origin:left top;` : '';
+            return `<div class="wm-${row.kind}" style="${style}${transform}font-size:${row.size * ratio}px;line-height:${row.size * 1.3 * ratio}px;padding:${padding}px;">${this.escapeHTML(lines.join('\n'))}</div>`;
+        }).join('');
+    }
+
+    drawClassicOnCanvas(ctx, w, h, regions) {
+        const layout = this.getClassicLayout(w, this.getCurrentTime(), this.getLocation(), this.getWeather(), h);
+        const right = this.config.position.endsWith('right');
+        const center = this.config.position.endsWith('center');
+        const x = right ? w - 10 - layout.width : center ? (w - layout.width) / 2 : 10;
+        const y = this.config.position.startsWith('bottom') ? h - 10 - layout.height : 10;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        for (const row of layout.rows) {
+            if (row.kind !== 'divider') regions?.push({ field: row.kind, x: x + row.x, y: y + row.y, width: row.width, height: row.height });
+            ctx.shadowColor = 'rgba(0,0,0,0.55)';
+            ctx.shadowBlur = 2;
+            ctx.shadowOffsetY = 1;
+            if (row.kind === 'divider') {
+                ctx.shadowColor = 'transparent';
+                ctx.fillStyle = '#ffd23f';
+                ctx.fillRect(x + row.x, y + row.y, row.width, row.height);
+                continue;
+            }
+            if (row.kind === 'coordinates') {
+                ctx.shadowColor = 'transparent';
+                ctx.fillStyle = 'rgba(190,190,180,0.24)';
+                this._drawRoundRect(ctx, x + row.x, y + row.y, row.width, row.height, 3 * this.getFontScale());
+                ctx.fill();
+                ctx.shadowColor = 'rgba(0,0,0,0.55)';
+            }
+            ctx.font = `400 ${row.size}px Arial, sans-serif`;
+            ctx.fillStyle = '#fff';
+            const padding = row.padding || 0;
+            const lines = row.lines || [row.text];
+            if (row.kind === 'time') {
+                ctx.save();
+                ctx.translate(x + row.x, y + row.y);
+                ctx.scale(row.stretch, 1);
+                ctx.fillText(row.text, 0, 0);
+                ctx.shadowColor = 'transparent';
+                const pattern = this.getTimePattern(row.text, row.size);
+                ctx.drawImage(pattern, 0, 0, pattern.width / 3, pattern.height / 3);
+                ctx.restore();
+                continue;
+            }
+            lines.forEach((line, i) => {
+                ctx.fillText(line, x + row.x + padding, y + row.y + padding + i * row.size * 1.3);
+            });
+        }
+    }
+
+    getTimePattern(text, size) {
+        const key = `${text}:${size}`;
+        if (this.timePattern?.key === key) return this.timePattern.canvas;
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.font = `400 ${size}px Arial, sans-serif`;
+        canvas.width = Math.ceil((ctx.measureText(text).width + 2) * 3);
+        canvas.height = Math.ceil(size * 1.3 * 3);
+        ctx.scale(3, 3);
+        ctx.strokeStyle = 'rgba(178,235,242,.7)';
+        ctx.lineWidth = 0.35;
+        ctx.beginPath();
+        for (let y = 0; y < size * 1.3; y += 1.6) {
+            ctx.moveTo(0, y);
+            for (let x = 0; x < canvas.width / 3; x += 6) {
+                ctx.bezierCurveTo(x + 2, y - .6, x + 4, y + .6, x + 6, y);
+            }
+        }
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'destination-in';
+        ctx.font = `400 ${size}px Arial, sans-serif`;
+        ctx.textBaseline = 'top';
+        ctx.fillText(text, 0, 0);
+        this.timePattern = { key, canvas };
+        return canvas;
+    }
+
+    getStackedLayout(w, h = Infinity, time = this.getCurrentTime(), location = this.getLocation(), weather = this.getWeather(), template = this.config.template, scale = this.getFontScale()) {
+        const ctx = document.createElement('canvas').getContext('2d');
+        const reserve = this.config.brandEnabled && this.config.position === 'bottom-left' ? this.getBrandReserve() : 0;
+        const inset = template === 'professional' ? 9 : 0;
+        const maxWidth = Math.max(40, w - 40 - reserve - inset);
+        const rows = [];
+        let height = 0, width = 0;
+        const addText = (kind, text, size, weight = 400, color = '#fff') => {
+            if (!text) return;
+            size *= scale;
+            ctx.font = `${weight} ${size}px Arial, sans-serif`;
+            const lines = this.wrapCanvasText(ctx, text, maxWidth);
+            const rowWidth = Math.max(...lines.map(line => ctx.measureText(line).width));
+            const rowHeight = lines.length * size * 1.3;
+            rows.push({ kind, text, lines, size, weight, color, x: inset, y: height, width: rowWidth, height: rowHeight });
+            height += rowHeight + 3 * scale;
+            width = Math.max(width, rowWidth);
+        };
+        if (template === 'modern') {
+            rows.push({ kind: 'badge', text: '今日', size: 13 * scale, weight: 700, color: '#000', x: inset, y: 0, width: 42 * scale, height: 21 * scale });
+            height += 25 * scale;
+            width = 42 * scale;
+        }
+        addText('time', template === 'professional' ? time.fullDate : time.time,
+            template === 'professional' ? 16 : template === 'simple' ? 34 : 30,
+            template === 'professional' ? 600 : template === 'simple' ? 300 : 700);
+        if (template !== 'professional') addText('date', time.date, 15);
+        if (weather) addText('weather', `${time.weekDay} ${weather}`, 13);
+        addText('location', location.full || LocationFormatter.join([location.province, location.city, location.address]), 13);
+        const coordinates = this.config.showCoordinates !== false ? this.formatCoordinates(location.coords) : '';
+        if (coordinates) addText('coordinates', `经纬度： ${coordinates}`, 13);
+        const note = this.config.useCustomText ? this.config.customText : '';
+        addText('text', note || (template === 'professional' ? '工作记录' : ''), 12, template === 'professional' ? 500 : 400, template === 'professional' ? '#00d4ff' : '#fff');
+        const brandHeight = this.config.brandEnabled && this.config.position !== 'bottom-left' ? 54 * this.getFontScale() + 10 : 0;
+        if (height > h - 40 - brandHeight && scale > 0.05) return this.getStackedLayout(w, h, time, location, weather, template, scale * 0.8);
+        const right = this.config.position.endsWith('right'), center = this.config.position.endsWith('center');
+        for (const row of rows) row.x += right ? width - row.width : center ? (width - row.width) / 2 : 0;
+        if (inset) rows.push({ kind: 'divider', x: 0, y: 0, width: 2, height, color: '#00d4ff' });
+        return { rows, width: width + inset, height };
+    }
+
+    stackedPreviewHTML(layout, ratio = 1) {
+        return layout.rows.map(row => {
+            const badge = row.kind === 'badge';
+            const style = `left:${row.x * ratio}px;top:${row.y * ratio}px;width:${row.width * ratio}px;height:${row.height * ratio}px;font-size:${(row.size || 0) * ratio}px;line-height:${(row.size || 0) * 1.3 * ratio}px;font-weight:${row.weight || 400};color:${row.color || '#fff'};`;
+            if (row.kind === 'divider') return `<span class="wm-divider" style="${style}background:${row.color};"></span>`;
+            return `<div class="wm-${row.kind}" style="${style}${badge ? `background:#00d4ff;padding:${3 * ratio}px ${7 * ratio}px;` : ''}">${this.escapeHTML((row.lines || [row.text]).join('\n'))}</div>`;
+        }).join('');
+    }
+
+    generateSimpleTemplate(time, location, weather) {
+        return this.stackedPreviewHTML(this.getStackedLayout(414, Infinity, time, location, weather, 'simple'));
+    }
+
+    generateModernTemplate(time, location, weather) {
+        return this.stackedPreviewHTML(this.getStackedLayout(414, Infinity, time, location, weather, 'modern'));
+    }
+
+    generateProfessionalTemplate(time, location, weather) {
+        return this.stackedPreviewHTML(this.getStackedLayout(414, Infinity, time, location, weather, 'professional'));
     }
 
     /**
@@ -289,18 +461,30 @@ class WatermarkManager {
     updatePreview(overlayElement) {
         if (!overlayElement) return;
 
-        overlayElement.className = `watermark-overlay template-${this.config.template}`;
+        overlayElement.className = `watermark-overlay template-${this.config.template} measured-watermark`;
         this.applyPosition(overlayElement);
+        const parent = overlayElement.parentElement;
+        const ratio = parent?.clientWidth && parent?.clientHeight ? Math.min(parent.clientWidth, parent.clientHeight) / 414 : 1;
+        const w = (parent?.clientWidth || 414) / ratio, h = (parent?.clientHeight || Infinity) / ratio;
+        const classic = this.config.template === 'default';
+        const layout = classic ? this.getClassicLayout(w, this.getCurrentTime(), this.getLocation(), this.getWeather(), h) : this.getStackedLayout(w, h);
+        const padding = (classic ? 10 : 20) * ratio;
+        overlayElement.style.maxWidth = 'none';
+        overlayElement.style.width = `${layout.width * ratio}px`;
+        overlayElement.style.height = `${layout.height * ratio}px`;
         overlayElement.style.opacity = this.config.opacity / 100;
-        this.applyFontSize(overlayElement);
-        overlayElement.innerHTML = this.generateWatermarkHTML();
+        if (this.config.position.startsWith('top')) overlayElement.style.top = `${padding}px`;
+        else overlayElement.style.bottom = `${padding}px`;
+        if (this.config.position.endsWith('left')) overlayElement.style.left = `${padding}px`;
+        if (this.config.position.endsWith('right')) overlayElement.style.right = `${padding}px`;
+        overlayElement.innerHTML = classic ? this.classicPreviewHTML(layout, ratio) : this.stackedPreviewHTML(layout, ratio);
     }
 
     applyPosition(overlayElement) {
-        overlayElement.style.top = '';
-        overlayElement.style.bottom = '';
-        overlayElement.style.left = '';
-        overlayElement.style.right = '';
+        overlayElement.style.top = 'auto';
+        overlayElement.style.bottom = 'auto';
+        overlayElement.style.left = 'auto';
+        overlayElement.style.right = 'auto';
         overlayElement.style.textAlign = '';
         overlayElement.style.transform = '';
 
@@ -334,141 +518,145 @@ class WatermarkManager {
         const dividerEl = overlayElement.querySelector('.wm-divider');
 
         const template = this.config.template;
-        const baseTimeSize = template === 'professional' ? 15 : (template === 'simple' ? 34 : (template === 'modern' ? 30 : 38));
+        const baseTimeSize = template === 'professional' ? 16 : (template === 'simple' ? 34 : (template === 'modern' ? 30 : 38));
 
         if (timeEl) timeEl.style.fontSize = `${baseTimeSize * scale}px`;
         if (dateEl) dateEl.style.fontSize = `${15 * scale}px`;
         if (weatherEl) weatherEl.style.fontSize = `${13 * scale}px`;
-        if (locEl) locEl.style.fontSize = `${11 * scale}px`;
+        if (locEl) locEl.style.fontSize = `${13 * scale}px`;
         if (textEl) textEl.style.fontSize = `${12 * scale}px`;
         if (dividerEl) dividerEl.style.height = `${28 * scale}px`;
     }
 
-    /**
-     * 在Canvas上绘制水印
-     */
+    /** Use the same visual scale as a 414px-wide camera preview, at any photo resolution. */
     drawWatermarkOnCanvas(ctx, canvasWidth, canvasHeight) {
-        const timeData = this.getCurrentTime();
-        const location = this.getLocation();
-        const weather = this.getWeather();
-        const opacity = this.config.opacity / 100;
-        const scale = this.getFontScale();
-
+        const ratio = Math.min(canvasWidth, canvasHeight) / 414;
+        const w = canvasWidth / ratio;
+        const h = canvasHeight / ratio;
         ctx.save();
-        ctx.globalAlpha = opacity;
-
-        switch (this.config.template) {
-            case 'default':
-                this.drawDefaultOnCanvas(ctx, canvasWidth, canvasHeight, timeData, location, weather, scale);
-                break;
-            case 'simple':
-                this.drawSimpleOnCanvas(ctx, canvasWidth, canvasHeight, timeData, location, weather, scale);
-                break;
-            case 'modern':
-                this.drawModernOnCanvas(ctx, canvasWidth, canvasHeight, timeData, location, weather, scale);
-                break;
-            case 'professional':
-                this.drawProfessionalOnCanvas(ctx, canvasWidth, canvasHeight, timeData, location, weather, scale);
-                break;
-        }
-
-        // 绘制品牌防伪水印（右下角）
-        if (this.config.brandEnabled) {
-            this.drawBrandOnCanvas(ctx, canvasWidth, canvasHeight, scale);
-        }
-
+        ctx.scale(ratio, ratio);
+        ctx.globalAlpha = this.config.opacity / 100;
+        const regions = [];
+        this.drawMainOnCanvas(ctx, w, h, regions);
+        if (this.config.brandEnabled) this.drawBrandOnCanvas(ctx, w, h, regions);
         ctx.restore();
+        return regions.map(region => ({ ...region, x: region.x * ratio, y: region.y * ratio, width: region.width * ratio, height: region.height * ratio }));
     }
 
-    /**
-     * Canvas绘制 - 品牌防伪水印（右下角）
-     * 匹配参考图：今日水印 → 相机 [真实可验](蓝色徽章) → 防伪 XXXXXXXXXXXXX
-     */
-    drawBrandOnCanvas(ctx, w, h, scale) {
-        const padding = 30 * (w / 1080);
-        const rightX = w - padding;
-        let y = h - padding;
+    getFontScale() {
+        return { small: 0.8, medium: 1, large: 1.25 }[this.config.fontSize] || 1;
+    }
 
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
+    getBrandReserve() {
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.font = '700 13px Arial, sans-serif';
+        const badgeWidth = ctx.measureText(this.config.brandBadge || '真实可验').width + 10;
+        const subtitleWidth = Math.min(75, ctx.measureText(this.config.brandSubtitle || '相机').width);
+        return (Math.max(130, badgeWidth + subtitleWidth + 5) + 10) * this.getFontScale();
+    }
 
-        // 防伪码（最底部）
-        if (this.config.antiFakeEnabled) {
-            const antifakeFontSize = 13 * scale * (w / 1080);
-            ctx.font = `${antifakeFontSize}px 'Courier New', monospace`;
-            ctx.fillStyle = 'rgba(255,255,255,0.7)';
-            ctx.shadowColor = 'rgba(0,0,0,0.7)';
-            ctx.shadowBlur = 4;
-            ctx.fillText(`防伪 ${this.currentAntiFakeCode}`, rightX, y);
-            y -= antifakeFontSize + 6 * (w / 1080);
+    escapeHTML(text) {
+        const element = document.createElement('span');
+        element.textContent = text;
+        return element.innerHTML;
+    }
+
+    wrapCanvasText(ctx, text, maxWidth) {
+        const lines = [];
+        for (const paragraph of String(text).split('\n')) {
+            let line = '';
+            for (const character of paragraph) {
+                if (line && ctx.measureText(line + character).width > maxWidth) {
+                    lines.push(line);
+                    line = character;
+                } else {
+                    line += character;
+                }
+            }
+            lines.push(line);
         }
-
-        // 副标题：相机 [真实可验] 蓝色徽章
-        const subFontSize = 14 * scale * (w / 1080);
-        const ratio = w / 1080;
-        const cameraText = '相机';
-        const verifyText = '真实可验';
-        const gap = 6 * ratio;
-        const badgePadX = 8 * ratio;
-        const badgePadY = 3 * ratio;
-        const badgeRadius = 4 * ratio;
-
-        // 测量文字宽度
-        ctx.font = `${subFontSize}px -apple-system, sans-serif`;
-        const cameraWidth = ctx.measureText(cameraText).width;
-        ctx.font = `bold ${subFontSize}px -apple-system, sans-serif`;
-        const verifyWidth = ctx.measureText(verifyText).width;
-        const badgeWidth = verifyWidth + badgePadX * 2;
-        const badgeHeight = subFontSize + badgePadY * 2;
-
-        // 总宽度 = 相机 + gap + 徽章
-        const totalWidth = cameraWidth + gap + badgeWidth;
-        const startX = rightX - totalWidth; // 左起位置
-
-        // 绘制"相机"文字
-        ctx.shadowColor = 'rgba(0,0,0,0.7)';
-        ctx.shadowBlur = 4;
-        ctx.font = `${subFontSize}px -apple-system, sans-serif`;
-        ctx.fillStyle = 'rgba(255,255,255,0.85)';
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'bottom';
-        const cameraY = y - badgePadY; // 对齐徽章中心
-        ctx.fillText(cameraText, startX, cameraY);
-
-        // 绘制蓝色徽章背景（圆角矩形）
-        const badgeX = startX + cameraWidth + gap;
-        const badgeY = y - badgeHeight;
-        ctx.shadowColor = 'transparent';
-        ctx.fillStyle = '#4A90D9';
-        this._drawRoundRect(ctx, badgeX, badgeY, badgeWidth, badgeHeight, badgeRadius);
-        ctx.fill();
-
-        // 绘制"真实可验"文字（白色加粗）
-        ctx.shadowColor = 'transparent';
-        ctx.fillStyle = '#ffffff';
-        ctx.font = `bold ${subFontSize}px -apple-system, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(verifyText, badgeX + badgeWidth / 2, badgeY + badgeHeight / 2);
-
-        y -= badgeHeight + 6 * (w / 1080);
-
-        // 品牌名称
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'bottom';
-        const brandFontSize = 20 * scale * (w / 1080);
-        ctx.font = `bold ${brandFontSize}px -apple-system, sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = 'rgba(0,0,0,0.7)';
-        ctx.shadowBlur = 6;
-        ctx.shadowOffsetY = 1;
-        ctx.fillText(`今日水印`, rightX, y);
-        ctx.shadowOffsetY = 0;
+        return lines;
     }
 
-    /**
-     * 绘制圆角矩形
-     */
+    drawMainOnCanvas(ctx, w, h, regions) {
+        if (this.config.template === 'default') return this.drawClassicOnCanvas(ctx, w, h, regions);
+        const layout = this.getStackedLayout(w, h);
+        const right = this.config.position.endsWith('right'), center = this.config.position.endsWith('center');
+        const x = right ? w - 20 - layout.width : center ? (w - layout.width) / 2 : 20;
+        const y = this.config.position.startsWith('bottom') ? h - 20 - layout.height : 20;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.shadowBlur = 3;
+        ctx.shadowOffsetY = 1;
+        for (const row of layout.rows) {
+            ctx.shadowColor = 'rgba(0,0,0,0.8)';
+            if (row.kind === 'divider' || row.kind === 'badge') {
+                ctx.shadowColor = 'transparent';
+                ctx.fillStyle = '#00d4ff';
+                ctx.fillRect(x + row.x, y + row.y, row.width, row.height);
+                if (row.kind === 'divider') continue;
+            } else regions?.push({ field: row.kind, x: x + row.x, y: y + row.y, width: row.width, height: row.height });
+            ctx.font = `${row.weight} ${row.size}px Arial, sans-serif`;
+            ctx.fillStyle = row.color;
+            const badgeScale = row.size / 13;
+            (row.lines || [row.text]).forEach((line, i) => ctx.fillText(line,
+                x + row.x + (row.kind === 'badge' ? 7 * badgeScale : 0),
+                y + row.y + (row.kind === 'badge' ? 3 * badgeScale : 0) + i * row.size * 1.3));
+        }
+    }
+
+    drawBrandOnCanvas(ctx, w, h, regions) {
+        const scale = this.getFontScale();
+        const padding = this.config.template === 'default' ? 10 : 20;
+        const rightX = w - padding;
+        const moveToTop = ['bottom-right', 'bottom-center'].includes(this.config.position);
+        const height = 24 * scale + 20 * scale + (this.config.antiFakeEnabled ? 10 * scale : 0);
+        let y = moveToTop ? padding : h - padding - height;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'top';
+        ctx.shadowColor = 'rgba(0,0,0,0.8)';
+        ctx.shadowBlur = 3;
+        ctx.shadowOffsetY = 1;
+        const name = this.config.brandName || '今日水印';
+        ctx.font = '700 20px Arial, sans-serif';
+        const nameSize = 20 * Math.min(1, 130 / ctx.measureText(name).width);
+        ctx.font = `700 ${nameSize * scale}px Arial, sans-serif`;
+        ctx.fillStyle = '#fff';
+        ctx.fillText(name, rightX, y);
+        regions?.push({ field: 'brandName', x: rightX - ctx.measureText(name).width, y, width: ctx.measureText(name).width, height: 24 * scale });
+        y += 24 * scale;
+        ctx.font = `700 ${13 * scale}px Arial, sans-serif`;
+        const badgeText = this.config.brandBadge || '真实可验';
+        const badgeWidth = ctx.measureText(badgeText).width + 10 * scale;
+        const badgeHeight = 18 * scale;
+        const badgeX = rightX - badgeWidth;
+        const subtitle = this.config.brandSubtitle || '相机';
+        ctx.font = '700 13px Arial, sans-serif';
+        const subtitleSize = 13 * Math.min(1, 75 / ctx.measureText(subtitle).width);
+        ctx.font = `700 ${subtitleSize * scale}px Arial, sans-serif`;
+        ctx.fillText(subtitle, badgeX - 5 * scale, y + 2 * scale);
+        regions?.push({ field: 'brandSubtitle', x: badgeX - 5 * scale - ctx.measureText(subtitle).width, y, width: ctx.measureText(subtitle).width, height: badgeHeight });
+        regions?.push({ field: 'brandBadge', x: badgeX, y, width: badgeWidth, height: badgeHeight });
+        ctx.shadowColor = 'transparent';
+        ctx.fillStyle = '#d0d4d4';
+        this._drawRoundRect(ctx, badgeX, y, badgeWidth, badgeHeight, 1 * scale);
+        ctx.fill();
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#354146';
+        ctx.font = `700 ${13 * scale}px Arial, sans-serif`;
+        ctx.fillText(badgeText, badgeX + badgeWidth / 2, y + 2 * scale);
+        y += 20 * scale;
+        if (this.config.antiFakeEnabled) {
+            ctx.shadowColor = 'rgba(0,0,0,0.8)';
+            ctx.textAlign = 'right';
+            ctx.font = `700 ${8 * scale}px Arial, sans-serif`;
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`${this.config.brandCodeLabel || '编号'} ${this.currentAntiFakeCode}`, rightX, y);
+            const width = ctx.measureText(`${this.config.brandCodeLabel || '编号'} ${this.currentAntiFakeCode}`).width;
+            regions?.push({ field: 'brandCodeLabel', x: rightX - width, y, width, height: 10 * scale });
+        }
+    }
+
     _drawRoundRect(ctx, x, y, w, h, r) {
         ctx.beginPath();
         ctx.moveTo(x + r, y);
@@ -481,253 +669,6 @@ class WatermarkManager {
         ctx.lineTo(x, y + r);
         ctx.quadraticCurveTo(x, y, x + r, y);
         ctx.closePath();
-    }
-
-    getFontScale() {
-        const sizeMap = { small: 0.8, medium: 1.0, large: 1.25 };
-        return sizeMap[this.config.fontSize] || 1.0;
-    }
-
-    /**
-     * Canvas绘制 - 经典模板（匹配截图）
-     * 从上到下绘制：时间|日期 → 星期 天气 → 地点
-     */
-    drawDefaultOnCanvas(ctx, w, h, timeData, location, weather, scale) {
-        const padding = 30 * (w / 1080);
-        const timeFontSize = 50 * scale * (w / 1080);
-        const dateFontSize = 20 * scale * (w / 1080);
-        const weatherFontSize = 17 * scale * (w / 1080);
-        const locFontSize = 13 * scale * (w / 1080); // 缩小位置信息字体
-        
-        const pos = this.getCanvasPosition(w, h, padding);
-        let x = pos.x;
-        let y = pos.y;
-
-        ctx.textAlign = pos.align;
-        ctx.textBaseline = 'top';
-
-        // === 第一行（顶部）：时间 | 日期 ===
-        ctx.font = `bold ${timeFontSize}px -apple-system, sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = 'rgba(0,0,0,0.7)';
-        ctx.shadowBlur = 8;
-        ctx.shadowOffsetY = 2;
-        ctx.fillText(timeData.time, x, y);
-        
-        // 竖线分隔符 + 日期（仅在左对齐时横向排列）
-        const timeWidth = ctx.measureText(timeData.time).width;
-        if (pos.align === 'right') {
-            // 右对齐：日期在时间左侧
-            const dateWidth = ctx.measureText(timeData.date).width;
-            const dividerX = x - timeWidth - 12 * (w / 1080) - 2 * (w / 1080);
-            const dateX = dividerX - 12 * (w / 1080) - dateWidth;
-            const dividerHeight = 38 * scale * (w / 1080);
-            
-            ctx.shadowColor = 'transparent';
-            ctx.fillStyle = '#FFD700';
-            ctx.fillRect(dividerX, y + 4 * (w / 1080), 2 * (w / 1080), dividerHeight);
-            
-            ctx.shadowColor = 'rgba(0,0,0,0.7)';
-            ctx.shadowBlur = 4;
-            ctx.font = `${dateFontSize}px -apple-system, sans-serif`;
-            ctx.fillStyle = '#ffffff';
-            ctx.fillText(timeData.date, dateX, y + (timeFontSize - dateFontSize) / 2);
-        } else {
-            // 左对齐/居中：日期在时间右侧
-            const dividerX = x + timeWidth + 12 * (w / 1080);
-            const dividerHeight = 38 * scale * (w / 1080);
-            const dateX = dividerX + 12 * (w / 1080);
-            
-            ctx.shadowColor = 'transparent';
-            ctx.fillStyle = '#FFD700';
-            ctx.fillRect(dividerX, y + 4 * (w / 1080), 2 * (w / 1080), dividerHeight);
-            
-            ctx.shadowColor = 'rgba(0,0,0,0.7)';
-            ctx.shadowBlur = 4;
-            ctx.font = `${dateFontSize}px -apple-system, sans-serif`;
-            ctx.fillStyle = '#ffffff';
-            ctx.fillText(timeData.date, dateX, y + (timeFontSize - dateFontSize) / 2);
-        }
-        y += timeFontSize + 8 * (w / 1080);
-
-        // === 第二行：星期 天气 ===
-        ctx.font = `${weatherFontSize}px -apple-system, sans-serif`;
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.shadowOffsetY = 1;
-        const weatherText = weather ? `${timeData.weekDay} ${weather}` : timeData.weekDay;
-        ctx.fillText(weatherText, x, y);
-        y += weatherFontSize + 6 * (w / 1080);
-
-        // === 第三行（底部）：地点（缩小字体，放在天气下方）===
-        const locText = location.full || `${location.province}${location.city}${location.address}`;
-        if (locText) {
-            ctx.font = `${locFontSize}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.75)';
-            ctx.fillText(`📍 ${locText}`, x, y);
-            y += locFontSize + 4 * (w / 1080);
-        }
-
-        // 自定义文字
-        if (this.config.useCustomText && this.config.customText) {
-            ctx.font = `${16 * scale * (w / 1080)}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.8)';
-            ctx.fillText(this.config.customText, x, y);
-        }
-    }
-
-    drawSimpleOnCanvas(ctx, w, h, timeData, location, weather, scale) {
-        const padding = 30 * (w / 1080);
-        const baseFontSize = 45 * scale * (w / 1080);
-        
-        const pos = this.getCanvasPosition(w, h, padding);
-        let x = pos.x;
-        let y = pos.y;
-
-        ctx.textAlign = pos.align;
-        ctx.textBaseline = 'top';
-
-        ctx.font = `300 ${baseFontSize}px -apple-system, sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = 'rgba(0,0,0,0.7)';
-        ctx.shadowBlur = 8;
-        ctx.shadowOffsetY = 2;
-        ctx.fillText(timeData.time, x, y);
-        y += baseFontSize + 4 * (w / 1080);
-
-        ctx.font = `${18 * scale * (w / 1080)}px -apple-system, sans-serif`;
-        ctx.fillStyle = 'rgba(255,255,255,0.8)';
-        ctx.shadowOffsetY = 1;
-        ctx.fillText(timeData.date, x, y);
-        y += 22 * scale * (w / 1080);
-
-        if (this.config.useCustomText && this.config.customText) {
-            ctx.font = `${16 * scale * (w / 1080)}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.7)';
-            ctx.fillText(this.config.customText, x, y);
-        }
-    }
-
-    drawModernOnCanvas(ctx, w, h, timeData, location, weather, scale) {
-        const padding = 30 * (w / 1080);
-        const baseFontSize = 40 * scale * (w / 1080);
-        
-        const pos = this.getCanvasPosition(w, h, padding);
-        let x = pos.x;
-        let y = pos.y;
-
-        ctx.textAlign = pos.align;
-        ctx.textBaseline = 'top';
-
-        // 徽章
-        const badgeText = '今日';
-        ctx.font = `bold ${14 * scale * (w / 1080)}px -apple-system, sans-serif`;
-        const badgeWidth = ctx.measureText(badgeText).width + 16 * (w / 1080);
-        const badgeHeight = 22 * scale * (w / 1080);
-        
-        if (pos.align === 'right') {
-            ctx.fillStyle = '#00d4ff';
-            ctx.fillRect(x - badgeWidth, y, badgeWidth, badgeHeight);
-            ctx.fillStyle = '#000';
-            ctx.shadowColor = 'transparent';
-            ctx.fillText(badgeText, x - 8 * (w / 1080), y + 4);
-        } else {
-            ctx.fillStyle = '#00d4ff';
-            ctx.fillRect(x, y, badgeWidth, badgeHeight);
-            ctx.fillStyle = '#000';
-            ctx.shadowColor = 'transparent';
-            ctx.fillText(badgeText, x + 8 * (w / 1080), y + 4);
-        }
-        y += badgeHeight + 8 * (w / 1080);
-
-        ctx.font = `800 ${baseFontSize}px -apple-system, sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = 'rgba(0,0,0,0.7)';
-        ctx.shadowBlur = 8;
-        ctx.shadowOffsetY = 2;
-        ctx.fillText(timeData.time, x, y);
-        y += baseFontSize + 4 * (w / 1080);
-
-        ctx.font = `${16 * scale * (w / 1080)}px -apple-system, sans-serif`;
-        ctx.fillStyle = 'rgba(255,255,255,0.8)';
-        ctx.shadowOffsetY = 1;
-        ctx.fillText(timeData.date, x, y);
-        y += 20 * scale * (w / 1080);
-
-        if (weather) {
-            ctx.font = `${16 * scale * (w / 1080)}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.7)';
-            ctx.fillText(`${timeData.weekDay} ${weather}`, x, y);
-            y += 20 * scale * (w / 1080);
-        }
-
-        const locText = location.full || `${location.province}${location.city}`;
-        if (locText) {
-            ctx.font = `${13 * scale * (w / 1080)}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.75)';
-            ctx.fillText(locText, x, y);
-            y += 22 * scale * (w / 1080);
-        }
-
-        if (this.config.useCustomText && this.config.customText) {
-            ctx.font = `${16 * scale * (w / 1080)}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.7)';
-            ctx.fillText(this.config.customText, x, y);
-        }
-    }
-
-    drawProfessionalOnCanvas(ctx, w, h, timeData, location, weather, scale) {
-        const padding = 30 * (w / 1080);
-        const lineX = padding;
-        let startY = h - padding - 100 * (w / 1080);
-
-        ctx.fillStyle = '#00d4ff';
-        ctx.fillRect(lineX, startY, 3 * (w / 1080), 90 * (w / 1080));
-
-        let x = lineX + 15 * (w / 1080);
-        let y = startY;
-
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-
-        ctx.font = `600 ${18 * scale * (w / 1080)}px -apple-system, sans-serif`;
-        ctx.fillStyle = '#ffffff';
-        ctx.shadowColor = 'rgba(0,0,0,0.7)';
-        ctx.shadowBlur = 4;
-        ctx.fillText(timeData.fullDate, x, y);
-        y += 26 * scale * (w / 1080);
-
-        if (weather) {
-            ctx.font = `${17 * scale * (w / 1080)}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.8)';
-            ctx.fillText(`${timeData.weekDay} ${weather}`, x, y);
-            y += 24 * scale * (w / 1080);
-        }
-
-        const locText = location.full || `${location.province}${location.city}${location.address}`;
-        if (locText) {
-            ctx.font = `${13 * scale * (w / 1080)}px -apple-system, sans-serif`;
-            ctx.fillStyle = 'rgba(255,255,255,0.75)';
-            ctx.fillText(`📍 ${locText}`, x, y);
-            y += 20 * scale * (w / 1080);
-        }
-
-        const noteText = this.config.useCustomText && this.config.customText 
-            ? this.config.customText 
-            : '工作记录';
-        ctx.font = `500 ${16 * scale * (w / 1080)}px -apple-system, sans-serif`;
-        ctx.fillStyle = '#00d4ff';
-        ctx.fillText(noteText, x, y);
-    }
-
-    getCanvasPosition(w, h, padding) {
-        const positions = {
-            'bottom-left': { x: padding, y: h - padding - 120, align: 'left' },
-            'bottom-right': { x: w - padding, y: h - padding - 120, align: 'right' },
-            'bottom-center': { x: w / 2, y: h - padding - 120, align: 'center' },
-            'top-left': { x: padding, y: padding + 180, align: 'left' },
-            'top-right': { x: w - padding, y: padding + 180, align: 'right' }
-        };
-        return positions[this.config.position] || positions['bottom-left'];
     }
 
     setCustomTime(date, time) {
@@ -745,12 +686,12 @@ class WatermarkManager {
     }
 
     setCustomLocation(province, city, address, coords) {
-        if (province || city || address) {
+        if (province || city || address || coords) {
             this.config.customLocation = {
                 province: province || '',
                 city: city || '',
                 address: address || '',
-                full: `${province || ''}${city || ''}${address || ''}`.trim(),
+                full: LocationFormatter.join([province, city, address]) || `坐标 ${coords}`,
                 coords: coords || ''
             };
         } else {
@@ -760,6 +701,7 @@ class WatermarkManager {
 
     setWeather(enabled, text, temp) {
         this.config.weather = { enabled, text, temp };
+        this.weatherDetail = null;
     }
 
     /**
@@ -775,7 +717,7 @@ class WatermarkManager {
      * @param {Object} weatherData - WeatherManager返回的天气对象
      */
     setWeatherFromAuto(weatherData) {
-        if (!weatherData) return;
+        if (!weatherData || this.config.weatherMode === 'manual') return;
         this.config.weather = {
             enabled: true,
             text: weatherData.text || '晴',
@@ -789,7 +731,7 @@ class WatermarkManager {
      * 获取天气详情数据
      */
     getWeatherDetail() {
-        return this.weatherDetail || null;
+        return this.config.weather.enabled && this.config.weatherMode !== 'manual' ? this.weatherDetail || null : null;
     }
 
     syncCurrentTime() {

@@ -288,8 +288,8 @@ class CameraManager {
 
         const ctx = this.canvas.getContext('2d', {
             alpha: false,
-            desynchronized: true,
-            willReadFrequently: false
+            desynchronized: false,
+            willReadFrequently: true
         });
 
         // 启用高质量图像平滑
@@ -314,6 +314,7 @@ class CameraManager {
         this._enhanceImageQuality(ctx, captureWidth, captureHeight);
 
         // 绘制水印
+        this.lastOriginalPhoto = this.canvas.toDataURL('image/jpeg', this.imageQuality);
         if (watermarkManager) {
             watermarkManager.drawWatermarkOnCanvas(ctx, captureWidth, captureHeight);
         }
